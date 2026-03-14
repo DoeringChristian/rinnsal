@@ -181,8 +181,10 @@ class TaskExpression(Expression):
         return engine_eval(self)
 
     def __str__(self) -> str:
-        """Evaluate and return string representation of result."""
-        return str(self.eval())
+        """Return string representation of the expression."""
+        if self._evaluated:
+            return f"TaskExpression({self.task_name}) = {self._result!r}"
+        return f"TaskExpression({self.task_name}, pending)"
 
     def __repr__(self) -> str:
         return f"TaskExpression({self.task_name}, hash={self.hash[:8]}...)"

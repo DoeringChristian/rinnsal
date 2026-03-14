@@ -67,6 +67,9 @@ class ExecutionEngine:
         # Evaluate each task in order
         for expr in ordered:
             if expr.hash in self._evaluated:
+                # Hash found in engine cache - ensure expression has the result
+                if not expr.is_evaluated:
+                    expr.set_result(self._evaluated[expr.hash])
                 continue
 
             if expr.is_evaluated:

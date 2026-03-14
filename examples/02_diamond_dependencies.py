@@ -9,7 +9,6 @@ This example demonstrates:
 
 from rinnsal import task, flow, eval
 
-
 # Track how many times each task runs
 run_counts = {"source": 0, "left": 0, "right": 0, "merge": 0}
 
@@ -48,7 +47,7 @@ def merge(total, count):
 
 @flow
 def diamond_flow():
-    """A diamond-shaped dependency graph.
+    r"""A diamond-shaped dependency graph.
 
            source
            /    \

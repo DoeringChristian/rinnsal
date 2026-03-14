@@ -10,9 +10,10 @@ using rinnsal, including:
 """
 
 import random
-from typing import Any
 
 from rinnsal import task, flow, Config
+from rinnsal.core.registry import get_registry
+from rinnsal.runtime.engine import get_engine
 
 
 # Simulated ML utilities
@@ -50,10 +51,9 @@ def simulate_training(data: dict, config: Config) -> dict:
 # ============= Tasks =============
 
 @task
-def load_raw_data(dataset_name: str, n_samples: int = 1000):
+def load_data(dataset_name: str, n_samples: int = 1000):
     """Load raw data from a source."""
     print(f"Loading dataset '{dataset_name}' with {n_samples} samples...")
-
     return {
         "dataset": dataset_name,
         **simulate_data(n_samples),
@@ -61,39 +61,41 @@ def load_raw_data(dataset_name: str, n_samples: int = 1000):
 
 
 @task
-def split_data(data: dict, train_ratio: float = 0.8):
-    """Split data into train and test sets."""
+def split_train(data: dict, train_ratio: float = 0.8):
+    """Extract training split from data."""
     n = data["n_samples"]
     split_idx = int(n * train_ratio)
-
-    print(f"Splitting data: {split_idx} train, {n - split_idx} test")
-
+    print(f"Extracting training data: {split_idx} samples")
     return {
-        "train": {
-            "X": data["X"][:split_idx],
-            "y": data["y"][:split_idx],
-            "n_samples": split_idx,
-            "n_features": data["n_features"],
-        },
-        "test": {
-            "X": data["X"][split_idx:],
-            "y": data["y"][split_idx:],
-            "n_samples": n - split_idx,
-            "n_features": data["n_features"],
-        },
+        "X": data["X"][:split_idx],
+        "y": data["y"][:split_idx],
+        "n_samples": split_idx,
+        "n_features": data["n_features"],
     }
 
 
 @task
-def preprocess(data: dict, normalize: bool = True, fill_missing: bool = True):
+def split_test(data: dict, train_ratio: float = 0.8):
+    """Extract test split from data."""
+    n = data["n_samples"]
+    split_idx = int(n * train_ratio)
+    print(f"Extracting test data: {n - split_idx} samples")
+    return {
+        "X": data["X"][split_idx:],
+        "y": data["y"][split_idx:],
+        "n_samples": n - split_idx,
+        "n_features": data["n_features"],
+    }
+
+
+@task
+def preprocess(data: dict, normalize: bool = True):
     """Preprocess the data."""
     print(f"Preprocessing {data['n_samples']} samples...")
-
     return {
         **data,
         "preprocessed": True,
         "normalized": normalize,
-        "filled_missing": fill_missing,
     }
 
 
@@ -101,14 +103,12 @@ def preprocess(data: dict, normalize: bool = True, fill_missing: bool = True):
 def train_model(train_data: dict, config: Config):
     """Train a model with the given configuration."""
     print(f"Training model with lr={config.learning_rate}, epochs={config.epochs}")
-
     return simulate_training(train_data, config)
 
 
 @task
 def evaluate_model(model: dict, test_data: dict):
     """Evaluate a model on test data."""
-    # Add some variance for test evaluation
     random.seed(hash(model["model_id"]) % 2**32)
     test_accuracy = model["accuracy"] + random.uniform(-0.05, 0.02)
     test_accuracy = max(0.0, min(1.0, test_accuracy))
@@ -124,39 +124,26 @@ def evaluate_model(model: dict, test_data: dict):
     }
 
 
-@task
-def select_best_model(evaluations: list):
-    """Select the best model from evaluation results."""
-    best = max(evaluations, key=lambda e: e["test_accuracy"])
-
-    print(f"Best model: {best['model_id']} with test_accuracy={best['test_accuracy']:.3f}")
-
-    return {
-        "best_model": best["model_id"],
-        "best_accuracy": best["test_accuracy"],
-        "best_config": best["config"],
-        "all_results": [
-            {"model_id": e["model_id"], "test_accuracy": e["test_accuracy"]}
-            for e in evaluations
-        ],
-    }
-
-
 # ============= Flows =============
 
 @flow
 def simple_training_pipeline(
-    dataset: str = "default",
+    dataset: str = "mnist",
     n_samples: int = 1000,
     learning_rate: float = 0.01,
     epochs: int = 10,
 ):
-    """A simple single-model training pipeline."""
-    # Load and preprocess
-    raw_data = load_raw_data(dataset, n_samples)
-    split = split_data(raw_data)
-    train_data = preprocess(split["train"])
-    test_data = preprocess(split["test"])
+    """Train and evaluate a model."""
+    # Load data
+    raw_data = load_data(dataset, n_samples)
+
+    # Split into train/test (separate tasks, same source)
+    train_split = split_train(raw_data)
+    test_split = split_test(raw_data)
+
+    # Preprocess each split
+    train_data = preprocess(train_split)
+    test_data = preprocess(test_split)
 
     # Train and evaluate
     config = Config(learning_rate=learning_rate, epochs=epochs)
@@ -170,34 +157,34 @@ def hyperparameter_search_pipeline(
     n_samples: int = 1000,
 ):
     """A pipeline that searches over hyperparameters."""
-    # Load and preprocess
-    raw_data = load_raw_data(dataset, n_samples)
-    split = split_data(raw_data)
-    train_data = preprocess(split["train"]).name("preprocess_train")
-    test_data = preprocess(split["test"]).name("preprocess_test")
+    # Load and split data
+    raw_data = load_data(dataset, n_samples)
+    train_split = split_train(raw_data)
+    test_split = split_test(raw_data)
+
+    # Preprocess
+    train_data = preprocess(train_split).name("preprocess_train")
+    test_data = preprocess(test_split).name("preprocess_test")
 
     # Define hyperparameter grid
     learning_rates = [0.001, 0.01, 0.1]
     epoch_counts = [10, 50, 100]
 
     # Train models with different configs
-    evaluations = []
     for lr in learning_rates:
         for epochs in epoch_counts:
             config = Config(learning_rate=lr, epochs=epochs)
             model = train_model(train_data, config).name(f"train_lr{lr}_ep{epochs}")
-            eval_result = evaluate_model(model, test_data).name(f"eval_lr{lr}_ep{epochs}")
-            evaluations.append(eval_result)
-
-    # Note: In the current implementation, we can't directly pass
-    # a list of task expressions to another task. This is a simplified
-    # demonstration.
+            evaluate_model(model, test_data).name(f"eval_lr{lr}_ep{epochs}")
 
 
 def run_simple_pipeline():
     print("=" * 60)
     print("Simple Training Pipeline")
     print("=" * 60 + "\n")
+
+    get_registry().clear()
+    get_engine().clear_cache()
 
     result = simple_training_pipeline(
         dataset="mnist",
@@ -217,6 +204,9 @@ def run_hyperparameter_search():
     print("\n" + "=" * 60)
     print("Hyperparameter Search Pipeline")
     print("=" * 60 + "\n")
+
+    get_registry().clear()
+    get_engine().clear_cache()
 
     result = hyperparameter_search_pipeline(
         dataset="cifar",
@@ -244,13 +234,16 @@ def demonstrate_flow_indexing():
     print("Flow Result Indexing")
     print("=" * 60 + "\n")
 
+    get_registry().clear()
+    get_engine().clear_cache()
+
     result = hyperparameter_search_pipeline()
 
     # Get all training tasks
     train_tasks = result["train_.*"]
     print(f"Training tasks: {len(train_tasks)}")
 
-    # Get tasks with specific learning rate
+    # Get tasks with specific learning rate using callable
     lr_01_tasks = result[lambda learning_rate: learning_rate == 0.01]
     print(f"Tasks with lr=0.01: {len(lr_01_tasks)}")
 

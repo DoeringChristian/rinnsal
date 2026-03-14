@@ -8,6 +8,7 @@ This example demonstrates the rich indexing capabilities of FlowResult:
 """
 
 from rinnsal import task, flow, Config
+from rinnsal.core.expression import TaskExpression
 
 
 @task
@@ -114,10 +115,15 @@ def demonstrate_indexing():
     print()
 
     # Find tasks training on mnist
+    # Note: When only one match, a single TaskExpression is returned
     mnist_tasks = result[lambda name: name == "mnist"]
-    print(f'Tasks with name="mnist": {len(mnist_tasks)}')
-    for t in mnist_tasks:
-        print(f"  - {t.task_name}")
+    if isinstance(mnist_tasks, TaskExpression):
+        print(f'Tasks with name="mnist": 1')
+        print(f"  - {mnist_tasks.task_name}")
+    else:
+        print(f'Tasks with name="mnist": {len(mnist_tasks)}')
+        for t in mnist_tasks:
+            print(f"  - {t.task_name}")
 
 
 def demonstrate_chained_filtering():
@@ -131,13 +137,15 @@ def demonstrate_chained_filtering():
     fast_training = training[lambda learning_rate: learning_rate == 0.1]
 
     print(f"All training tasks: {len(training)}")
-    print(f"Fast training tasks (lr=0.1): {len(fast_training)}")
 
-    if hasattr(fast_training, '__iter__'):
+    # Handle the case where only one match returns a TaskExpression
+    if isinstance(fast_training, TaskExpression):
+        print(f"Fast training tasks (lr=0.1): 1")
+        print(f"  - {fast_training.task_name}: {fast_training.result}")
+    else:
+        print(f"Fast training tasks (lr=0.1): {len(fast_training)}")
         for t in fast_training:
             print(f"  - {t.task_name}: {t.result}")
-    else:
-        print(f"  - {fast_training.task_name}: {fast_training.result}")
 
 
 if __name__ == "__main__":

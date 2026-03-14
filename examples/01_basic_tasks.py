@@ -8,8 +8,9 @@ This example demonstrates the fundamental concepts of rinnsal:
 - Task chaining
 """
 
-import rinnsal
 from rinnsal import task, flow, eval
+from rinnsal.core.registry import get_registry
+from rinnsal.runtime.engine import get_engine
 
 
 # Define simple tasks
@@ -38,10 +39,14 @@ def add(a, b):
 def demonstrate_lazy_evaluation():
     print("=== Lazy Evaluation ===")
 
+    # Clear registry and engine cache to start fresh
+    get_registry().clear()
+    get_engine().clear_cache()
+
     # This does NOT execute the task - it returns a TaskExpression
     expr = source()
-    print(f"source() returned: {expr}")
-    print(f"Type: {type(expr)}")
+    print(f"source() returned: {repr(expr)}")
+    print(f"Type: {type(expr).__name__}")
 
     # To actually run it, use eval()
     result = eval(expr)
@@ -53,10 +58,14 @@ def demonstrate_lazy_evaluation():
 def demonstrate_chaining():
     print("=== Task Chaining ===")
 
+    # Clear registry and engine cache to start fresh
+    get_registry().clear()
+    get_engine().clear_cache()
+
     # Build a chain: source() -> double() -> double()
-    step1 = source()          # Will return 10
-    step2 = double(step1)     # Will return 20
-    step3 = double(step2)     # Will return 40
+    step1 = source()  # Will return 10
+    step2 = double(step1)  # Will return 20
+    step3 = double(step2)  # Will return 40
 
     # Evaluate the final task - this runs the whole chain
     result = eval(step3)
@@ -67,6 +76,10 @@ def demonstrate_chaining():
 # Multiple tasks can be evaluated together
 def demonstrate_multiple_eval():
     print("=== Multiple Evaluation ===")
+
+    # Clear registry and engine cache to start fresh
+    get_registry().clear()
+    get_engine().clear_cache()
 
     s = source()
     d = double(s)
@@ -89,6 +102,10 @@ def simple_pipeline():
 
 def demonstrate_flow():
     print("=== Flow Execution ===")
+
+    # Clear registry and engine cache to start fresh
+    get_registry().clear()
+    get_engine().clear_cache()
 
     result = simple_pipeline()
 

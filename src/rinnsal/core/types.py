@@ -150,9 +150,7 @@ class Runs(Generic[T]):
     @overload
     def __getitem__(self, filter_fn: Callable[[T], bool]) -> Runs[T]: ...
 
-    def __getitem__(
-        self, key: int | slice | str | Callable[[T], bool]
-    ) -> T | Runs[T]:
+    def __getitem__(self, key: int | slice | str | Callable[[T], bool]) -> T | Runs[T]:
         if isinstance(key, int):
             return self._entries[key]
         elif isinstance(key, slice):
