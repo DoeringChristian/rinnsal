@@ -1,0 +1,48 @@
+[project]
+name = "rinnsal"
+version = "0.1.0"
+description = "A declarative DAG execution framework for Python"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "cloudpickle>=3.0",
+]
+
+[project.optional-dependencies]
+ssh = ["asyncssh>=2.14"]
+ray = ["ray>=2.9"]
+all = ["rinnsal[ssh,ray]"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.0",
+    "mypy>=1.8",
+    "ruff>=0.3",
+]
+
+[build-system]
+requires = ["uv_build>=0.10.10,<0.11.0"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "unit: Unit tests (fast, no I/O)",
+    "integration: Integration tests (cross-component)",
+    "slow: Performance tests",
+    "ssh: Requires SSH setup",
+    "ray: Requires Ray cluster",
+]
+
+[tool.mypy]
+strict = true
+python_version = "3.11"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
