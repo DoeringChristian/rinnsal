@@ -12,6 +12,21 @@ from rinnsal.core.graph import DAG
 from rinnsal.core.registry import flow_scope, get_flow_context
 from rinnsal.core.types import Entry, Runs
 from rinnsal.runtime.engine import get_engine
+from rinnsal.progress.bar import ProgressBar, SilentProgress
+
+# Global setting for progress display
+_show_progress: bool = True
+
+
+def set_progress(enabled: bool) -> None:
+    """Enable or disable progress bar display."""
+    global _show_progress
+    _show_progress = enabled
+
+
+def get_progress() -> bool:
+    """Check if progress display is enabled."""
+    return _show_progress
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -186,17 +201,42 @@ class FlowDef:
             dag = DAG.from_expressions(tasks)
             ordered = dag.topological_sort()
 
-            # Evaluate all tasks
+            # Setup progress tracking
+            if _show_progress:
+                progress = ProgressBar(total=len(ordered))
+            else:
+                progress = SilentProgress(total=len(ordered))
+
+            # Evaluate all tasks with progress
             engine = get_engine()
             for expr in ordered:
-                if not expr.is_evaluated:
-                    engine.evaluate(expr)
+                if expr.is_evaluated:
+                    # Already evaluated (cached in memory)
+                    progress.complete(expr.task_name, cached=True)
+                else:
+                    progress.start(expr.task_name)
+                    was_cached = self._check_cached(engine, expr)
+                    try:
+                        engine.evaluate(expr)
+                        progress.complete(expr.task_name, cached=was_cached)
+                    except Exception:
+                        progress.fail(expr.task_name)
+                        raise
+
+            progress.finish()
 
             # Create and store result
             result = FlowResult(tasks, self.name)
             self._runs.append(result)
 
             return result
+
+    def _check_cached(self, engine: Any, expr: TaskExpression) -> bool:
+        """Check if expression result is in database cache."""
+        if engine.database is not None and engine.use_cache:
+            cached = engine.database.fetch_task_result(expr.hash)
+            return cached is not None
+        return False
 
     def results(self, **kwargs: Any) -> FlowResult:
         """Re-run the flow function to rebuild DAG, load cached results.

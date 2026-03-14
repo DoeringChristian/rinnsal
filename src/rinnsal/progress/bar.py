@@ -93,15 +93,21 @@ class ProgressBar:
         filled = int(self._width * state.completed / max(state.total, 1))
         bar = "█" * filled + "░" * (self._width - filled)
 
-        # Build status line
-        elapsed = f"{state.elapsed:.1f}s"
-        stats = f"[{state.passed} passed, {state.cached} cached, {state.failed} failed]"
-        percent = f"{state.percentage:.0f}%"
+        # Build status line: 1/5 2 passed, 1 cached
+        count = f"{state.completed}/{state.total}"
+        parts = []
+        if state.passed:
+            parts.append(f"{state.passed} passed")
+        if state.cached:
+            parts.append(f"{state.cached} cached")
+        if state.failed:
+            parts.append(f"{state.failed} failed")
+        stats = ", ".join(parts) if parts else ""
 
         if state.current_task and not final:
-            line = f"\r{bar} {percent} {stats} - {state.current_task}"
+            line = f"\r{bar} {count} {stats} [running: {state.current_task}]"
         else:
-            line = f"\r{bar} {percent} {stats} {elapsed}"
+            line = f"\r{bar} {count} {stats}"
 
         # Clear previous line if needed
         clear = " " * max(0, self._last_line_length - len(line))
