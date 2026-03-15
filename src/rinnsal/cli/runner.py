@@ -6,7 +6,11 @@ import argparse
 import sys
 from typing import TYPE_CHECKING, Any
 
-from rinnsal.cli.flags import add_builtin_flags, extract_builtin_flags, remove_builtin_flags
+from rinnsal.cli.flags import (
+    add_builtin_flags,
+    extract_builtin_flags,
+    remove_builtin_flags,
+)
 from rinnsal.cli.parser import create_parser_from_signature
 from rinnsal.execution.inline import InlineExecutor
 from rinnsal.persistence.file_store import FileDatabase
@@ -85,6 +89,7 @@ def _create_executor(name: str, capture: bool = True) -> Any:
         # Import here to avoid circular imports
         try:
             from rinnsal.execution.subprocess import SubprocessExecutor
+
             return SubprocessExecutor(capture=capture)
         except ImportError:
             raise ValueError("Subprocess executor not available")
@@ -93,6 +98,7 @@ def _create_executor(name: str, capture: bool = True) -> Any:
     elif name == "ray":
         try:
             from rinnsal.execution.ray_executor import RayExecutor
+
             return RayExecutor(capture=capture)
         except ImportError:
             raise ValueError("Ray executor requires ray to be installed")
@@ -100,7 +106,9 @@ def _create_executor(name: str, capture: bool = True) -> Any:
         raise ValueError(f"Unknown executor: {name}")
 
 
-def _run_spin_mode(flow: FlowDef, task_name: str, kwargs: dict[str, Any]) -> Any:
+def _run_spin_mode(
+    flow: FlowDef, task_name: str, kwargs: dict[str, Any]
+) -> Any:
     """Run a flow in spin mode, re-executing only the specified task.
 
     All other tasks load their most recent cached result.
@@ -161,6 +169,7 @@ def _run_spin_mode(flow: FlowDef, task_name: str, kwargs: dict[str, Any]) -> Any
 
     # Create result
     from rinnsal.core.flow import FlowResult
+
     return FlowResult(tasks, flow.name)
 
 

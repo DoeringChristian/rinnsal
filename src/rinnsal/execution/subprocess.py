@@ -48,7 +48,10 @@ def _worker_execute(
 
     try:
         if capture:
-            with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+            with (
+                redirect_stdout(stdout_capture),
+                redirect_stderr(stderr_capture),
+            ):
                 result = func(*args, **kwargs)
         else:
             result = func(*args, **kwargs)
@@ -116,7 +119,10 @@ class SubprocessExecutor(Executor):
         # Create snapshot if enabled
         remapped_pythonpath: str | None = None
         if self._snapshot:
-            from rinnsal.core.snapshot import get_snapshot_manager, build_pythonpath
+            from rinnsal.core.snapshot import (
+                get_snapshot_manager,
+                build_pythonpath,
+            )
 
             manager = get_snapshot_manager()
             _, snapshot_path = manager.create_snapshot(expr.func)
@@ -156,7 +162,9 @@ class SubprocessExecutor(Executor):
                         )
                     )
                 else:
-                    error = cloudpickle.loads(error_bytes) if error_bytes else None
+                    error = (
+                        cloudpickle.loads(error_bytes) if error_bytes else None
+                    )
                     result_future.set_result(
                         ExecutionResult(
                             value=None,
@@ -233,7 +241,10 @@ class ForkExecutor(Executor):
         # Create snapshot if enabled
         remapped_pythonpath: str | None = None
         if self._snapshot:
-            from rinnsal.core.snapshot import get_snapshot_manager, build_pythonpath
+            from rinnsal.core.snapshot import (
+                get_snapshot_manager,
+                build_pythonpath,
+            )
 
             manager = get_snapshot_manager()
             _, snapshot_path = manager.create_snapshot(expr.func)
@@ -273,7 +284,9 @@ class ForkExecutor(Executor):
                         )
                     )
                 else:
-                    error = cloudpickle.loads(error_bytes) if error_bytes else None
+                    error = (
+                        cloudpickle.loads(error_bytes) if error_bytes else None
+                    )
                     result_future.set_result(
                         ExecutionResult(
                             value=None,

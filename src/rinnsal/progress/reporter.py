@@ -70,56 +70,70 @@ class ProgressReporter:
 
     def task_started(self, task_name: str) -> None:
         """Report that a task has started."""
-        self.report(ProgressEvent(
-            event_type=EventType.TASK_STARTED,
-            task_name=task_name,
-        ))
+        self.report(
+            ProgressEvent(
+                event_type=EventType.TASK_STARTED,
+                task_name=task_name,
+            )
+        )
 
     def task_completed(self, task_name: str, result: Any = None) -> None:
         """Report that a task has completed successfully."""
-        self.report(ProgressEvent(
-            event_type=EventType.TASK_COMPLETED,
-            task_name=task_name,
-            result=result,
-        ))
+        self.report(
+            ProgressEvent(
+                event_type=EventType.TASK_COMPLETED,
+                task_name=task_name,
+                result=result,
+            )
+        )
 
     def task_failed(self, task_name: str, error: Exception) -> None:
         """Report that a task has failed."""
-        self.report(ProgressEvent(
-            event_type=EventType.TASK_FAILED,
-            task_name=task_name,
-            error=error,
-        ))
+        self.report(
+            ProgressEvent(
+                event_type=EventType.TASK_FAILED,
+                task_name=task_name,
+                error=error,
+            )
+        )
 
     def task_cached(self, task_name: str, result: Any = None) -> None:
         """Report that a task result was loaded from cache."""
-        self.report(ProgressEvent(
-            event_type=EventType.TASK_CACHED,
-            task_name=task_name,
-            result=result,
-        ))
+        self.report(
+            ProgressEvent(
+                event_type=EventType.TASK_CACHED,
+                task_name=task_name,
+                result=result,
+            )
+        )
 
     def flow_started(self, flow_name: str) -> None:
         """Report that a flow has started."""
-        self.report(ProgressEvent(
-            event_type=EventType.FLOW_STARTED,
-            flow_name=flow_name,
-        ))
+        self.report(
+            ProgressEvent(
+                event_type=EventType.FLOW_STARTED,
+                flow_name=flow_name,
+            )
+        )
 
     def flow_completed(self, flow_name: str) -> None:
         """Report that a flow has completed."""
-        self.report(ProgressEvent(
-            event_type=EventType.FLOW_COMPLETED,
-            flow_name=flow_name,
-        ))
+        self.report(
+            ProgressEvent(
+                event_type=EventType.FLOW_COMPLETED,
+                flow_name=flow_name,
+            )
+        )
 
     def flow_failed(self, flow_name: str, error: Exception) -> None:
         """Report that a flow has failed."""
-        self.report(ProgressEvent(
-            event_type=EventType.FLOW_FAILED,
-            flow_name=flow_name,
-            error=error,
-        ))
+        self.report(
+            ProgressEvent(
+                event_type=EventType.FLOW_FAILED,
+                flow_name=flow_name,
+                error=error,
+            )
+        )
 
 
 # Global reporter instance

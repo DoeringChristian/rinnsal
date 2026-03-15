@@ -2,7 +2,10 @@
 
 import pytest
 
-from rinnsal.cli.parser import create_parser_from_signature, parse_args_for_function
+from rinnsal.cli.parser import (
+    create_parser_from_signature,
+    parse_args_for_function,
+)
 
 
 class TestCreateParserFromSignature:

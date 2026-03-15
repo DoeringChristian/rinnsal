@@ -88,7 +88,9 @@ class ExecutionEngine:
             resolved_args, resolved_kwargs = self._resolve_args(expr)
 
             # Execute the task
-            result, log = self._execute_with_retry(expr, resolved_args, resolved_kwargs)
+            result, log = self._execute_with_retry(
+                expr, resolved_args, resolved_kwargs
+            )
 
             # Store the result
             expr.set_result(result)
@@ -173,7 +175,9 @@ class ExecutionEngine:
         # All attempts failed
         if last_error is not None:
             raise last_error
-        raise RuntimeError(f"Task '{expr.task_name}' failed after {max_attempts} attempts")
+        raise RuntimeError(
+            f"Task '{expr.task_name}' failed after {max_attempts} attempts"
+        )
 
     def clear_cache(self) -> None:
         """Clear the in-memory evaluation cache."""
@@ -213,7 +217,9 @@ def eval(expression: TaskExpression) -> Any: ...
 
 
 @overload
-def eval(expression: TaskExpression, *expressions: TaskExpression) -> tuple[Any, ...]: ...
+def eval(
+    expression: TaskExpression, *expressions: TaskExpression
+) -> tuple[Any, ...]: ...
 
 
 def eval(*expressions: TaskExpression) -> Any | tuple[Any, ...]:

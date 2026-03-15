@@ -127,7 +127,9 @@ class TaskExpression(Expression):
     @property
     def result(self) -> Any:
         if not self._evaluated:
-            raise RuntimeError(f"Task '{self.task_name}' has not been evaluated yet")
+            raise RuntimeError(
+                f"Task '{self.task_name}' has not been evaluated yet"
+            )
         return self._result
 
     def set_result(self, result: Any) -> None:

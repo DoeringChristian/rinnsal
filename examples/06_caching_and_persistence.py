@@ -17,7 +17,7 @@ def expensive(x):
     global run_count
     run_count += 1
     print(f"Computing x={x}...")
-    return x ** 2
+    return x**2
 
 
 @flow

@@ -88,7 +88,11 @@ def create_parser_from_signature(
                 parser.add_argument(
                     flag_name,
                     action="store_true",
-                    default=param.default if param.default is not inspect.Parameter.empty else False,
+                    default=(
+                        param.default
+                        if param.default is not inspect.Parameter.empty
+                        else False
+                    ),
                     help=f"Enable {name}",
                 )
         else:

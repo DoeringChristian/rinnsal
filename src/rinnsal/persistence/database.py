@@ -122,29 +122,25 @@ class BaseDatabase(ABC):
         self,
         task_hash: str,
         entry: Entry,
-    ) -> None:
-        ...
+    ) -> None: ...
 
     @abstractmethod
     def fetch_task_result(
         self,
         task_hash: str,
-    ) -> Entry | None:
-        ...
+    ) -> Entry | None: ...
 
     @abstractmethod
     def fetch_task_history(
         self,
         task_hash: str,
-    ) -> list[Entry]:
-        ...
+    ) -> list[Entry]: ...
 
     @abstractmethod
     def task_exists(
         self,
         task_hash: str,
-    ) -> bool:
-        ...
+    ) -> bool: ...
 
     @abstractmethod
     def store_flow_run(
@@ -152,20 +148,17 @@ class BaseDatabase(ABC):
         flow_name: str,
         task_hashes: list[str],
         metadata: dict[str, Any] | None = None,
-    ) -> str:
-        ...
+    ) -> str: ...
 
     @abstractmethod
     def fetch_flow_runs(
         self,
         flow_name: str,
         limit: int | None = None,
-    ) -> list[dict[str, Any]]:
-        ...
+    ) -> list[dict[str, Any]]: ...
 
     @abstractmethod
-    def clear(self) -> None:
-        ...
+    def clear(self) -> None: ...
 
 
 class InMemoryDatabase(BaseDatabase):
@@ -205,7 +198,10 @@ class InMemoryDatabase(BaseDatabase):
         self,
         task_hash: str,
     ) -> bool:
-        return task_hash in self._task_results and len(self._task_results[task_hash]) > 0
+        return (
+            task_hash in self._task_results
+            and len(self._task_results[task_hash]) > 0
+        )
 
     def store_flow_run(
         self,

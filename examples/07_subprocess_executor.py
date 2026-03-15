@@ -9,7 +9,7 @@ from rinnsal.runtime.engine import ExecutionEngine, set_engine
 
 @task
 def compute(n):
-    total = sum(i ** 0.5 for i in range(n * 10000))
+    total = sum(i**0.5 for i in range(n * 10000))
     return {"n": n, "result": total, "pid": os.getpid()}
 
 

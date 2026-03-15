@@ -18,8 +18,12 @@ class DAG:
 
     def __init__(self) -> None:
         self._nodes: dict[str, TaskExpression] = {}
-        self._edges: dict[str, set[str]] = defaultdict(set)  # node -> dependencies
-        self._reverse_edges: dict[str, set[str]] = defaultdict(set)  # node -> dependents
+        self._edges: dict[str, set[str]] = defaultdict(
+            set
+        )  # node -> dependencies
+        self._reverse_edges: dict[str, set[str]] = defaultdict(
+            set
+        )  # node -> dependents
 
     def add_node(self, expr: TaskExpression) -> None:
         """Add a task expression to the graph."""
@@ -75,8 +79,10 @@ class DAG:
 
         # Recalculate properly: in_degree[x] = number of nodes that depend on x
         # Actually, for execution order, we need nodes with no dependencies first
-        in_degree = {h: len(self._edges.get(h, set()) & set(self._nodes.keys()))
-                     for h in self._nodes}
+        in_degree = {
+            h: len(self._edges.get(h, set()) & set(self._nodes.keys()))
+            for h in self._nodes
+        }
 
         # Start with nodes that have no dependencies
         queue = [h for h, d in in_degree.items() if d == 0]
@@ -148,6 +154,7 @@ class DAG:
 
             for dep in expr.get_dependencies():
                 from rinnsal.core.expression import TaskExpression
+
                 if isinstance(dep, TaskExpression):
                     dag.add_node(dep)
                     dag.add_edge(expr.hash, dep.hash)

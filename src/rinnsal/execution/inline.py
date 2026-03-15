@@ -61,7 +61,10 @@ class InlineExecutor(Executor):
 
         try:
             if self._capture:
-                with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                with (
+                    redirect_stdout(stdout_capture),
+                    redirect_stderr(stderr_capture),
+                ):
                     value = expr.func(*resolved_args, **resolved_kwargs)
             else:
                 value = expr.func(*resolved_args, **resolved_kwargs)

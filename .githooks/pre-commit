@@ -1,0 +1,26 @@
+#!/bin/sh
+# Pre-commit hook that runs black on staged Python files
+
+# Get staged Python files
+STAGED_FILES=$(git diff --cached --name-only --diff-filter=ACM | grep '\.py$')
+
+if [ -z "$STAGED_FILES" ]; then
+    exit 0
+fi
+
+# Check if black is available
+if ! command -v black >/dev/null 2>&1; then
+    echo "black not found, skipping format check"
+    exit 0
+fi
+
+# Run black on staged files
+echo "Running black..."
+black --check $STAGED_FILES
+if [ $? -ne 0 ]; then
+    echo ""
+    echo "Black found formatting issues. Run 'black .' to fix."
+    exit 1
+fi
+
+exit 0

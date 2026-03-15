@@ -63,7 +63,9 @@ def hash_value(value: Any) -> str:
     try:
         serialized = cloudpickle.dumps(value)
         hasher.update(serialized)
-    except (TypeError, pickle_error) if (pickle_error := Exception) else Exception:
+    except (
+        (TypeError, pickle_error) if (pickle_error := Exception) else Exception
+    ):
         # Last resort: use repr
         hasher.update(repr(value).encode())
 
@@ -99,7 +101,10 @@ def _get_content_hash(value: Any) -> str:
     For other values, computes the value hash.
     """
     # Check if this is an expression with a hash attribute
-    if hasattr(value, "hash") and callable(getattr(value, "hash", None)) is False:
+    if (
+        hasattr(value, "hash")
+        and callable(getattr(value, "hash", None)) is False
+    ):
         expr_hash = getattr(value, "hash")
         if isinstance(expr_hash, str):
             return expr_hash
@@ -107,7 +112,9 @@ def _get_content_hash(value: Any) -> str:
     return hash_value(value)
 
 
-def compute_task_hash(func: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
+def compute_task_hash(
+    func: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> str:
     """Compute the full content-addressed hash for a task invocation.
 
     Combines the function hash with the argument hash to produce a
@@ -137,7 +144,10 @@ class ContentHasher:
         return self._func_cache[func_id]
 
     def hash_task(
-        self, func: Callable[..., Any], args: tuple[Any, ...], kwargs: dict[str, Any]
+        self,
+        func: Callable[..., Any],
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
     ) -> str:
         """Compute the content hash for a task invocation."""
         hasher = hashlib.sha256()

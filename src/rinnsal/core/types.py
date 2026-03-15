@@ -18,7 +18,9 @@ class Config:
 
     _data: dict[str, Any] = field(default_factory=dict)
 
-    def __init__(self, data: dict[str, Any] | None = None, **kwargs: Any) -> None:
+    def __init__(
+        self, data: dict[str, Any] | None = None, **kwargs: Any
+    ) -> None:
         if data is not None:
             self._data = dict(data)
         else:
@@ -150,7 +152,9 @@ class Runs(Generic[T]):
     @overload
     def __getitem__(self, filter_fn: Callable[[T], bool]) -> Runs[T]: ...
 
-    def __getitem__(self, key: int | slice | str | Callable[[T], bool]) -> T | Runs[T]:
+    def __getitem__(
+        self, key: int | slice | str | Callable[[T], bool]
+    ) -> T | Runs[T]:
         if isinstance(key, int):
             return self._entries[key]
         elif isinstance(key, slice):

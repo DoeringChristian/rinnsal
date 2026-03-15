@@ -115,7 +115,9 @@ class FlowContext:
 
 
 # Context variable for the current flow context
-_flow_context: ContextVar[FlowContext | None] = ContextVar("flow_context", default=None)
+_flow_context: ContextVar[FlowContext | None] = ContextVar(
+    "flow_context", default=None
+)
 
 
 def get_flow_context() -> FlowContext | None:

@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 
 try:
     import ray
+
     HAS_RAY = True
 except ImportError:
     HAS_RAY = False
@@ -92,7 +93,10 @@ class RayExecutor(Executor):
 
             try:
                 if capture:
-                    with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                    with (
+                        redirect_stdout(stdout_capture),
+                        redirect_stderr(stderr_capture),
+                    ):
                         result = func(*args, **kwargs)
                 else:
                     result = func(*args, **kwargs)
@@ -158,6 +162,7 @@ class RayExecutor(Executor):
 
         # Use a thread to wait for the result
         import threading
+
         thread = threading.Thread(target=fetch_result, daemon=True)
         thread.start()
 
@@ -187,7 +192,10 @@ class RayExecutor(Executor):
 
             try:
                 if capture:
-                    with redirect_stdout(stdout_capture), redirect_stderr(stderr_capture):
+                    with (
+                        redirect_stdout(stdout_capture),
+                        redirect_stderr(stderr_capture),
+                    ):
                         result = func(*args, **kwargs)
                 else:
                     result = func(*args, **kwargs)

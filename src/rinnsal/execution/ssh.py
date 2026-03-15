@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 try:
     import asyncssh
+
     HAS_ASYNCSSH = True
 except ImportError:
     HAS_ASYNCSSH = False
@@ -213,7 +214,9 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
                     stdout=result.stdout or "",
                     stderr=result.stderr or "",
                     success=False,
-                    error=RuntimeError(f"Remote execution failed: {result.stderr}"),
+                    error=RuntimeError(
+                        f"Remote execution failed: {result.stderr}"
+                    ),
                 )
 
             # Parse output
@@ -234,7 +237,11 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
                         stdout=output["stdout"],
                         stderr=output["stderr"],
                         success=False,
-                        error=cloudpickle.loads(output["error"]) if output["error"] else None,
+                        error=(
+                            cloudpickle.loads(output["error"])
+                            if output["error"]
+                            else None
+                        ),
                     )
             except Exception as e:
                 return ExecutionResult(

@@ -165,7 +165,9 @@ class FileDatabase(BaseDatabase):
             "metadata": metadata or {},
         }
 
-        run_path = runs_dir / f"{timestamp.strftime('%Y%m%d_%H%M%S')}_{run_id}.json"
+        run_path = (
+            runs_dir / f"{timestamp.strftime('%Y%m%d_%H%M%S')}_{run_id}.json"
+        )
 
         with file_lock(runs_dir):
             with open(run_path, "w") as f:
@@ -223,7 +225,11 @@ class FileDatabase(BaseDatabase):
             "log": entry.log,
             "metadata": entry.metadata,
             "timestamp": entry.timestamp.isoformat(),
-            "snapshot": self._serialize_snapshot(entry.snapshot) if entry.snapshot else None,
+            "snapshot": (
+                self._serialize_snapshot(entry.snapshot)
+                if entry.snapshot
+                else None
+            ),
         }
 
     def _deserialize_entry(self, data: dict[str, Any]) -> Entry:
@@ -243,7 +249,9 @@ class FileDatabase(BaseDatabase):
             "path": str(snapshot.path),
         }
 
-    def _deserialize_snapshot(self, data: dict[str, Any] | None) -> Snapshot | None:
+    def _deserialize_snapshot(
+        self, data: dict[str, Any] | None
+    ) -> Snapshot | None:
         """Deserialize a Snapshot from a dictionary."""
         if data is None:
             return None

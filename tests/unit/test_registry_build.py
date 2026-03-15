@@ -2,7 +2,12 @@
 
 import pytest
 
-from rinnsal.core.registry_build import register, build, get_registry, clear_registry
+from rinnsal.core.registry_build import (
+    register,
+    build,
+    get_registry,
+    clear_registry,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -36,6 +41,7 @@ class TestRegister:
             pass
 
         with pytest.raises(RuntimeError, match="already exists"):
+
             @register
             class DuplicateClass:  # noqa: F811
                 pass

@@ -111,7 +111,9 @@ class FileLock:
         self.acquire()
         return self
 
-    def __exit__(self, exc_type: type | None, exc_val: Exception | None, exc_tb: object) -> None:
+    def __exit__(
+        self, exc_type: type | None, exc_val: Exception | None, exc_tb: object
+    ) -> None:
         self.release()
 
 

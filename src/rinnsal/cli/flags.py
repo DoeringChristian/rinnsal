@@ -33,7 +33,8 @@ def add_builtin_flags(parser: argparse.ArgumentParser) -> None:
     )
 
     builtin_group.add_argument(
-        "-s", "--no-capture",
+        "-s",
+        "--no-capture",
         action="store_true",
         default=False,
         help="Disable stdout/stderr capture during execution",

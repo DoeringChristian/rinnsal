@@ -111,7 +111,9 @@ class LocalityAwareScheduler(Scheduler):
             best_worker = self._find_best_worker(task, dag, available_workers)
 
             if best_worker:
-                assignments.append(TaskAssignment(task=task, worker=best_worker))
+                assignments.append(
+                    TaskAssignment(task=task, worker=best_worker)
+                )
                 available_workers.remove(best_worker)
 
         return assignments

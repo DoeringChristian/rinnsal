@@ -28,6 +28,7 @@ def get_progress() -> bool:
     """Check if progress display is enabled."""
     return _show_progress
 
+
 P = ParamSpec("P")
 R = TypeVar("R")
 
@@ -70,7 +71,9 @@ class FlowResult:
     def __getitem__(self, pattern: str) -> TaskExpression | FlowResult: ...
 
     @overload
-    def __getitem__(self, filter_fn: Callable[..., bool]) -> TaskExpression | FlowResult: ...
+    def __getitem__(
+        self, filter_fn: Callable[..., bool]
+    ) -> TaskExpression | FlowResult: ...
 
     def __getitem__(
         self, key: int | str | Callable[..., bool]
@@ -97,7 +100,9 @@ class FlowResult:
             return matches[0]
         return FlowResult(matches, self._flow_name)
 
-    def _filter_by_callable(self, filter_fn: Callable[..., bool]) -> TaskExpression | FlowResult:
+    def _filter_by_callable(
+        self, filter_fn: Callable[..., bool]
+    ) -> TaskExpression | FlowResult:
         """Filter tasks by a callable that inspects task arguments."""
         sig = inspect.signature(filter_fn)
         param_names = set(sig.parameters.keys())
@@ -118,10 +123,12 @@ class FlowResult:
                     if param in param_names:
                         if task.is_evaluated:
                             from rinnsal.core.expression import unwrap_value
+
                             arg_dict[param] = unwrap_value(value)
                         else:
                             # For unevaluated tasks, try to get the value
                             from rinnsal.core.expression import ValueExpression
+
                             if isinstance(value, ValueExpression):
                                 arg_dict[param] = value.value
                             elif not isinstance(value, TaskExpression):
@@ -132,9 +139,11 @@ class FlowResult:
                     if key in param_names:
                         if task.is_evaluated:
                             from rinnsal.core.expression import unwrap_value
+
                             arg_dict[key] = unwrap_value(value)
                         else:
                             from rinnsal.core.expression import ValueExpression
+
                             if isinstance(value, ValueExpression):
                                 arg_dict[key] = value.value
                             elif not isinstance(value, TaskExpression):

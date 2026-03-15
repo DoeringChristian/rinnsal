@@ -55,14 +55,16 @@ def build_pythonpath(snapshot_path: Path | None = None) -> str:
             for p in sys.path:
                 resolved = str(Path(p).resolve()) if p else ""
                 if resolved.startswith(git_root_str):
-                    relative = resolved[len(git_root_str):]
+                    relative = resolved[len(git_root_str) :]
                     remapped.append(snapshot_str + relative)
                 else:
                     remapped.append(p)
             pythonpath = os.pathsep.join(remapped)
         else:
             # No git root found, just prepend snapshot
-            pythonpath = str(snapshot_path) + os.pathsep + os.pathsep.join(sys.path)
+            pythonpath = (
+                str(snapshot_path) + os.pathsep + os.pathsep.join(sys.path)
+            )
     else:
         pythonpath = os.pathsep.join(sys.path)
 

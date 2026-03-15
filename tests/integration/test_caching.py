@@ -86,6 +86,7 @@ class TestCachingWithInMemoryDatabase:
 
         # Manually store a different result in the database for the same hash
         from rinnsal.core.types import Entry
+
         db.store_task_result(expr1.hash, Entry(result=999))
 
         # Clear engine's in-memory cache

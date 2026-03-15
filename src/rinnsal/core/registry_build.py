@@ -42,7 +42,9 @@ def register(cls: type[T]) -> type[T]:
     return cls
 
 
-def build(tp: type[T], cfg: dict | T | None, *args: object, **kwargs: object) -> T:
+def build(
+    tp: type[T], cfg: dict | T | None, *args: object, **kwargs: object
+) -> T:
     """Instantiate an object from configuration using the registry.
 
     If cfg is a dict with a 'type' key, looks up the class in the registry
@@ -83,7 +85,9 @@ def build(tp: type[T], cfg: dict | T | None, *args: object, **kwargs: object) ->
 
     if isinstance(cfg, dict):
         if "type" not in cfg:
-            raise KeyError("Config dict must have a 'type' key to build from registry")
+            raise KeyError(
+                "Config dict must have a 'type' key to build from registry"
+            )
         type_name = cfg["type"]
         if type_name not in _registry:
             available = ", ".join(_registry.keys()) if _registry else "(none)"
@@ -102,7 +106,9 @@ def build(tp: type[T], cfg: dict | T | None, *args: object, **kwargs: object) ->
         obj = cfg
 
     if not isinstance(obj, tp):
-        raise TypeError(f"Expected type {tp.__name__}, got {type(obj).__name__}")
+        raise TypeError(
+            f"Expected type {tp.__name__}, got {type(obj).__name__}"
+        )
     return obj
 
 
