@@ -33,7 +33,7 @@ class Executor(ABC):
     def __init__(
         self,
         capture: bool = True,
-        snapshot: bool = False,
+        snapshot: bool = True,
     ) -> None:
         self._capture = capture
         self._snapshot = snapshot

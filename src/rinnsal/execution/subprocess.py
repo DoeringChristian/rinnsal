@@ -21,6 +21,7 @@ def _worker_execute(
     serialized_args: bytes,
     serialized_kwargs: bytes,
     capture: bool,
+    remapped_pythonpath: str | None = None,
 ) -> tuple[bool, Any, str, str, bytes | None]:
     """Worker function that runs in a subprocess.
 
@@ -30,6 +31,12 @@ def _worker_execute(
     import io
     import sys
     from contextlib import redirect_stderr, redirect_stdout
+
+    # If remapped PYTHONPATH provided, replace sys.path
+    original_path = None
+    if remapped_pythonpath:
+        original_path = sys.path.copy()
+        sys.path = remapped_pythonpath.split(os.pathsep)
 
     # Deserialize
     func = cloudpickle.loads(serialized_func)
@@ -61,6 +68,10 @@ def _worker_execute(
             stderr_capture.getvalue(),
             cloudpickle.dumps(e),
         )
+    finally:
+        # Restore original sys.path
+        if original_path is not None:
+            sys.path = original_path
 
 
 class SubprocessExecutor(Executor):
@@ -74,7 +85,7 @@ class SubprocessExecutor(Executor):
         self,
         max_workers: int | None = None,
         capture: bool = True,
-        snapshot: bool = False,
+        snapshot: bool = True,
     ) -> None:
         super().__init__(capture=capture, snapshot=snapshot)
         self._max_workers = max_workers or os.cpu_count() or 4
@@ -102,6 +113,16 @@ class SubprocessExecutor(Executor):
         """Submit a task for subprocess execution."""
         pool = self._get_pool()
 
+        # Create snapshot if enabled
+        remapped_pythonpath: str | None = None
+        if self._snapshot:
+            from rinnsal.core.snapshot import get_snapshot_manager, build_pythonpath
+
+            manager = get_snapshot_manager()
+            _, snapshot_path = manager.create_snapshot(expr.func)
+            if snapshot_path and snapshot_path.exists():
+                remapped_pythonpath = build_pythonpath(snapshot_path)
+
         # Serialize function and arguments
         serialized_func = cloudpickle.dumps(expr.func)
         serialized_args = cloudpickle.dumps(resolved_args)
@@ -114,6 +135,7 @@ class SubprocessExecutor(Executor):
             serialized_args,
             serialized_kwargs,
             self._capture,
+            remapped_pythonpath,
         )
 
         # Wrap the future to return ExecutionResult
@@ -177,7 +199,7 @@ class ForkExecutor(Executor):
         self,
         max_workers: int | None = None,
         capture: bool = True,
-        snapshot: bool = False,
+        snapshot: bool = True,
     ) -> None:
         if sys.platform == "win32":
             raise RuntimeError("ForkExecutor is not available on Windows")
@@ -208,6 +230,16 @@ class ForkExecutor(Executor):
         """Submit a task for fork-based execution."""
         pool = self._get_pool()
 
+        # Create snapshot if enabled
+        remapped_pythonpath: str | None = None
+        if self._snapshot:
+            from rinnsal.core.snapshot import get_snapshot_manager, build_pythonpath
+
+            manager = get_snapshot_manager()
+            _, snapshot_path = manager.create_snapshot(expr.func)
+            if snapshot_path and snapshot_path.exists():
+                remapped_pythonpath = build_pythonpath(snapshot_path)
+
         # Serialize function and arguments
         serialized_func = cloudpickle.dumps(expr.func)
         serialized_args = cloudpickle.dumps(resolved_args)
@@ -220,6 +252,7 @@ class ForkExecutor(Executor):
             serialized_args,
             serialized_kwargs,
             self._capture,
+            remapped_pythonpath,
         )
 
         # Wrap the future
