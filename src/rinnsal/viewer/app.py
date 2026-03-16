@@ -902,12 +902,27 @@ def ClickableStaticFigure(image_png: bytes | None, data_pickle: bytes):
             start_new_session=True,
         )
 
-    if image_png:
-        import base64
+    def _render_png():
+        if image_png:
+            return image_png
+        import cloudpickle
+        import io
 
-        img_b64 = base64.b64encode(image_png).decode("utf-8")
-    else:
-        img_b64 = ""
+        fig = cloudpickle.loads(data_pickle)
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=100, bbox_inches="tight")
+        import matplotlib.pyplot as plt
+
+        plt.close(fig)
+        buf.seek(0)
+        return buf.read()
+
+    import base64
+
+    png = solara.use_memo(
+        _render_png, dependencies=[id(data_pickle)]
+    )
+    img_b64 = base64.b64encode(png).decode("utf-8")
 
     widget = ClickableImage(img_b64=img_b64)
     widget.observe(_open_native, names=["clicked"])
