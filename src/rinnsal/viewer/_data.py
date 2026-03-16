@@ -94,13 +94,8 @@ def discover_runs(root_path: Path) -> list[Path]:
 def load_scalars_timeseries(
     log_path: Path, max_points: int = DEFAULT_MAX_POINTS
 ) -> dict[str, list[tuple[int, float, float | None]]]:
-    """Load all scalars as time series.
-
-    Returns dict mapping tag to list of (iteration, value, timestamp).
-    """
-    timeseries: dict[str, list[tuple[int, float, float | None]]] = (
-        {}
-    )
+    """Load all scalars as time series."""
+    timeseries: dict[str, list[tuple[int, float, float | None]]] = {}
 
     events_path = log_path / EVENTS_FILE
     if not events_path.exists():
@@ -116,11 +111,7 @@ def load_scalars_timeseries(
                 if tag not in timeseries:
                     timeseries[tag] = []
                 timeseries[tag].append(
-                    (
-                        event.iteration,
-                        event.scalar.value,
-                        event.timestamp,
-                    )
+                    (event.iteration, event.scalar.value, event.timestamp)
                 )
     except (IOError, OSError):
         pass
@@ -128,16 +119,11 @@ def load_scalars_timeseries(
     for tag in timeseries:
         timeseries[tag].sort(key=lambda x: x[0])
         if len(timeseries[tag]) > max_points:
-            points_2d = [
-                (it, val) for it, val, _ in timeseries[tag]
-            ]
-            ts_map = {
-                it: ts for it, _, ts in timeseries[tag]
-            }
+            points_2d = [(it, val) for it, val, _ in timeseries[tag]]
+            ts_map = {it: ts for it, _, ts in timeseries[tag]}
             downsampled = lttb_downsample(points_2d, max_points)
             timeseries[tag] = [
-                (it, val, ts_map.get(it))
-                for it, val in downsampled
+                (it, val, ts_map.get(it)) for it, val in downsampled
             ]
 
     return timeseries
@@ -189,15 +175,15 @@ def load_figure(fig_path_or_data: Path | bytes) -> Any:
             return None
 
 
-def load_figures_info(
+def load_figures_index(
     log_path: Path,
-) -> dict[str, list[tuple[int, bytes, bytes, bool]]]:
-    """Load all figure data and metadata.
+) -> dict[str, list[tuple[int, int, bool]]]:
+    """Load figure metadata only (no image/pickle data).
 
-    Returns dict mapping tag to list of
-    (iteration, image_png, data_pickle, interactive).
+    Returns dict mapping tag to list of (iteration, file_offset,
+    interactive). Actual data loaded on demand via load_figure_at().
     """
-    figures: dict[str, list[tuple[int, bytes, bytes, bool]]] = {}
+    figures: dict[str, list[tuple[int, int, bool]]] = {}
 
     events_path = log_path / EVENTS_FILE
     if not events_path.exists():
@@ -207,18 +193,15 @@ def load_figures_info(
         from rinnsal.logger.event_file import EventFileReader
 
         reader = EventFileReader(events_path)
-        for event in reader:
-            if event.WhichOneof("data") == "figure":
-                tag = event.figure.tag
+        index = reader.build_index()
+        for offset, length, iteration, data_type, tag in index:
+            if data_type == "figure":
                 if tag not in figures:
                     figures[tag] = []
+                # We need interactive flag — read just that event
+                event = reader.read_event_at(offset)
                 figures[tag].append(
-                    (
-                        event.iteration,
-                        event.figure.image,
-                        event.figure.data,
-                        event.figure.interactive,
-                    )
+                    (iteration, offset, event.figure.interactive)
                 )
     except (IOError, OSError):
         pass
@@ -226,3 +209,15 @@ def load_figures_info(
     for tag in figures:
         figures[tag].sort(key=lambda x: x[0])
     return figures
+
+
+def load_figure_at(log_path: Path, offset: int) -> tuple[bytes, bytes, bool]:
+    """Load a specific figure event by file offset.
+
+    Returns (image_png, data_pickle, interactive).
+    """
+    from rinnsal.logger.event_file import EventFileReader
+
+    reader = EventFileReader(log_path / EVENTS_FILE)
+    event = reader.read_event_at(offset)
+    return event.figure.image, event.figure.data, event.figure.interactive

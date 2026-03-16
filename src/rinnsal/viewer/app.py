@@ -16,8 +16,8 @@ import solara
 
 from rinnsal.viewer._data import (
     discover_runs,
-    load_figure,
-    load_figures_info,
+    load_figure_at,
+    load_figures_index,
     load_scalars_timeseries,
     load_text_timeseries,
 )
@@ -761,7 +761,11 @@ def TextPanel():
 def FigureItem(
     run: Path, tag: str, root_path: Path, data: list, color: str
 ):
-    """Display figure for a single run and tag."""
+    """Display figure for a single run and tag.
+
+    data is list of (iteration, file_offset, interactive).
+    Actual figure bytes loaded on demand when displayed.
+    """
     run_name = (
         str(run.relative_to(root_path)) if run != root_path else "."
     )
@@ -786,14 +790,24 @@ def FigureItem(
             )
             solara.Text(f"Iteration: {iterations[iter_idx.value]}")
 
-        # Display figure - dispatch based on interactive flag
-        entry = data[iter_idx.value]
-        _it, image_png, data_pickle, interactive = entry
+        # Load figure data on demand
+        _it, offset, interactive = data[iter_idx.value]
+
+        def _load():
+            return load_figure_at(run, offset)
+
+        figure_data = solara.use_memo(
+            _load, dependencies=[offset]
+        )
+        image_png, data_pickle, _interactive = figure_data
+
         try:
-            if interactive:
+            if interactive and data_pickle:
                 InteractiveFigure(data_pickle)
-            else:
+            elif image_png:
                 StaticFigure(image_png)
+            else:
+                solara.Text("No figure data.")
         except Exception as e:
             import traceback
 
@@ -813,15 +827,15 @@ def FiguresPanel():
         return
 
     def load_data():
-        return {run: load_figures_info(run) for run in runs}
+        return {run: load_figures_index(run) for run in runs}
 
     runs_data = solara.use_memo(
         load_data, dependencies=[tuple(runs), refresh]
     )
 
     all_tags = set()
-    for figures_info in runs_data.values():
-        all_tags.update(figures_info.keys())
+    for figures_index in runs_data.values():
+        all_tags.update(figures_index.keys())
 
     if not all_tags:
         solara.Text("No figures logged in selected runs.")
@@ -847,13 +861,23 @@ def FiguresPanel():
 def InteractiveFigure(data_pickle: bytes):
     """Display a matplotlib figure interactively using ipympl."""
     import cloudpickle
+    import matplotlib
 
-    mpl_fig = cloudpickle.loads(data_pickle)
-    if mpl_fig is None:
+    matplotlib.use("module://ipympl.backend_nbagg")
+    from ipympl.backend_nbagg import Canvas, FigureManager
+
+    def _create_canvas():
+        mpl_fig = cloudpickle.loads(data_pickle)
+        canvas = Canvas(mpl_fig)
+        FigureManager(canvas, 0)
+        return canvas
+
+    canvas = solara.use_memo(_create_canvas, dependencies=[id(data_pickle)])
+    if canvas is None:
         solara.Text("Failed to load figure.")
         return
 
-    solara.FigureMatplotlib(mpl_fig)
+    solara.display(canvas)
 
 
 @solara.component
