@@ -793,12 +793,12 @@ def FigureItem(
         _it, image_png, data_pickle, interactive = data[iter_idx.value]
 
         try:
-            if interactive and data_pickle:
-                InteractiveFigure(data_pickle)
-            elif image_png:
+            if image_png:
                 StaticFigure(image_png)
             else:
                 solara.Text("No figure data.")
+            if interactive and data_pickle:
+                PopOutButton(data_pickle)
         except Exception as e:
             import traceback
 
@@ -848,50 +848,46 @@ def FiguresPanel():
                     )
 
 
-_ipympl_backend_set = False
-_fig_num_counter = 0
-
-
-def _ensure_ipympl_backend():
-    global _ipympl_backend_set
-    if not _ipympl_backend_set:
-        import matplotlib
-
-        matplotlib.use("module://ipympl.backend_nbagg")
-        _ipympl_backend_set = True
-
-
 @solara.component
-def InteractiveFigure(data_pickle: bytes):
-    """Display an interactive matplotlib figure using ipympl."""
-    global _fig_num_counter
+def PopOutButton(data_pickle: bytes):
+    """Button that opens a native matplotlib window for interactive use."""
 
-    def _create_output():
-        global _fig_num_counter
-        _ensure_ipympl_backend()
-        import cloudpickle
-        import ipywidgets as widgets
-        from IPython.display import display as ipy_display
-        from ipympl.backend_nbagg import Canvas, FigureManager
+    def open_native():
+        import tempfile
+        import textwrap
 
-        _fig_num_counter += 1
-        mpl_fig = cloudpickle.loads(data_pickle)
-        canvas = Canvas(mpl_fig)
-        FigureManager(canvas, _fig_num_counter)
-        canvas.header_visible = False
-        canvas.toolbar_visible = True
-        output = widgets.Output()
-        with output:
-            ipy_display(canvas)
-        return output
+        # Write pickle data to a temp file, spawn a subprocess that
+        # loads it and calls plt.show() with the native GUI backend.
+        tmp = tempfile.NamedTemporaryFile(
+            suffix=".pkl", delete=False
+        )
+        tmp.write(data_pickle)
+        tmp.close()
 
-    output = solara.use_memo(
-        _create_output, dependencies=[id(data_pickle)]
+        script = textwrap.dedent(f"""\
+            import os, sys, cloudpickle, matplotlib
+            matplotlib.use("TkAgg")
+            import matplotlib.pyplot as plt
+            with open({tmp.name!r}, "rb") as f:
+                fig = cloudpickle.load(f)
+            os.unlink({tmp.name!r})
+            manager = plt.get_current_fig_manager()
+            fig.set_canvas(manager.canvas)
+            manager.canvas.figure = fig
+            fig.canvas.draw_idle()
+            plt.show()
+        """)
+
+        subprocess.Popen(
+            [sys.executable, "-c", script],
+            start_new_session=True,
+        )
+
+    solara.Button(
+        "Open interactive",
+        on_click=open_native,
+        icon_name="mdi-open-in-new",
     )
-    if output is None:
-        solara.Text("Failed to load figure.")
-        return
-    solara.display(output)
 
 
 @solara.component
