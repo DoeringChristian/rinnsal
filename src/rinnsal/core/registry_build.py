@@ -62,7 +62,6 @@ def build(
 
     Raises:
         TypeError: If the returned object is not of type tp
-        ValueError: If cfg is None
         KeyError: If 'type' key missing or type not in registry
 
     Example:
@@ -80,9 +79,6 @@ def build(
         # With additional kwargs (override config)
         opt3 = build(Optimizer, {"type": "Optimizer"}, lr=0.1)
     """
-    if cfg is None:
-        raise ValueError("Cannot build from None config")
-
     if isinstance(cfg, dict):
         if "type" not in cfg:
             raise KeyError(
@@ -103,13 +99,13 @@ def build(
                 kwargs[k] = v
         obj = cls(*args, **kwargs)
     else:
+        # Treat as instance value (including None)
         obj = cfg
 
-    if not isinstance(obj, tp):
-        raise TypeError(
-            f"Expected type {tp.__name__}, got {type(obj).__name__}"
-        )
-    return obj
+    assert isinstance(
+        obj, tp
+    ), f"Type {type(obj)} did not match requested type {tp}"
+    return obj  # type: ignore[return-value]
 
 
 def get_registry() -> dict[str, type]:

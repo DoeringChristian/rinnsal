@@ -92,8 +92,19 @@ class TestBuild:
         class Model:
             pass
 
-        with pytest.raises(ValueError, match="Cannot build from None"):
+        with pytest.raises(
+            AssertionError, match="did not match requested type"
+        ):
             build(Model, None)
+
+    def test_build_none_allowed_with_optional_type(self):
+        @register
+        class Model:
+            pass
+
+        # None is valid when type annotation allows it
+        result = build(Model | None, None)
+        assert result is None
 
     def test_build_missing_type_raises(self):
         @register
@@ -120,7 +131,9 @@ class TestBuild:
         class Other:
             pass
 
-        with pytest.raises(TypeError, match="Expected type Model"):
+        with pytest.raises(
+            AssertionError, match="did not match requested type"
+        ):
             build(Model, {"type": "Other"})
 
     def test_build_with_args(self):
