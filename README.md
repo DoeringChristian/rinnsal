@@ -1,6 +1,7 @@
 # Rinnsal
 
-A declarative DAG execution framework for Python. Define tasks, compose them into flows, and let rinnsal handle caching, deduplication, and execution.
+A declarative DAG execution framework for Python. Define tasks, compose them
+into flows, and let rinnsal handle caching, deduplication, and execution.
 
 ## Installation
 
@@ -182,7 +183,7 @@ model = build(MyModel, config)
 Flows show progress automatically:
 
 ```
-ˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆˆ‘‘‘‘‘‘‘‘‘‘‘‘‘‘‘‘‘‘‘‘ 2/5 2 passed [running: train]
+â–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–ˆâ–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘â–‘ 2/5 2 passed [running: train]
 ```
 
 Disable with:
@@ -194,7 +195,8 @@ set_progress(False)
 
 ### Code Snapshots
 
-Subprocess executors snapshot code by default, ensuring tasks use consistent code even if files change during execution:
+Subprocess executors snapshot code by default, ensuring tasks use consistent
+code even if files change during execution:
 
 ```python
 executor = SubprocessExecutor(snapshot=True)  # Default
