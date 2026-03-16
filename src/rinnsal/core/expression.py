@@ -84,10 +84,16 @@ class TaskExpression(Expression):
         self._task_def = task_def
         self._args = args
         self._kwargs = kwargs
-        self._name: str | None = None
         self._hash: str | None = None
         self._result: Any = None
         self._evaluated = False
+
+        # Auto-set name from "name" argument if it's a string
+        name_arg = kwargs.get("name")
+        if isinstance(name_arg, str):
+            self._name: str | None = name_arg
+        else:
+            self._name = None
 
     @property
     def task_def(self) -> TaskDef:
