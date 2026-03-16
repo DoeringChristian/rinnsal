@@ -851,17 +851,14 @@ def InteractiveFigure(fig_data: Path | bytes):
     matplotlib.use("module://ipympl.backend_nbagg")
     from ipympl.backend_nbagg import Canvas, FigureManager
 
-    # Load the pickled figure
     mpl_fig = load_figure(fig_data)
     if mpl_fig is None:
         solara.Text("Loading figure...")
         return
 
-    # Create an interactive canvas for the figure
     canvas = Canvas(mpl_fig)
     manager = FigureManager(canvas, 0)
 
-    # Display the canvas widget
     solara.display(canvas)
 
 
@@ -876,20 +873,17 @@ def StaticFigure(fig_data: Path | bytes):
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    # Load the pickled figure
     mpl_fig = load_figure(fig_data)
     if mpl_fig is None:
         solara.Text("Failed to load figure.")
         return
 
-    # Render to PNG
     buf = io.BytesIO()
     mpl_fig.savefig(buf, format="png", dpi=100, bbox_inches="tight")
     buf.seek(0)
     img_data = base64.b64encode(buf.read()).decode("utf-8")
     plt.close(mpl_fig)
 
-    # Display as HTML img tag
     solara.HTML(
         tag="img",
         attributes={

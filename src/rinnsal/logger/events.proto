@@ -1,7 +1,7 @@
 // Protocol buffer schema for rinnsal event logging.
 //
 // To regenerate events_pb2.py:
-//   protoc --python_out=. events.proto
+//   python -m grpc_tools.protoc --python_out=. -I. events.proto
 
 syntax = "proto3";
 
@@ -9,7 +9,7 @@ package rinnsal;
 
 // A single logged event
 message Event {
-  // Timestamp in seconds since epoch (nanosecond precision stored as double)
+  // Timestamp in seconds since epoch
   double timestamp = 1;
 
   // Iteration number
@@ -36,15 +36,15 @@ message Text {
   string value = 2;
 }
 
-// A figure (matplotlib figure serialized with cloudpickle)
+// A figure reference (data stored in separate .cpkl file)
 message Figure {
   string tag = 1;
-  bytes data = 2;  // cloudpickle serialized figure
+  string path = 2;  // relative path to .cpkl file
   bool interactive = 3;
 }
 
-// A checkpoint (arbitrary object serialized with cloudpickle)
+// A checkpoint reference (data stored in separate .cpkl file)
 message Checkpoint {
   string tag = 1;
-  bytes data = 2;  // cloudpickle serialized object
+  string path = 2;  // relative path to .cpkl file
 }

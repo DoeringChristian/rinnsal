@@ -191,13 +191,13 @@ def load_figure(fig_path_or_data: Path | bytes) -> Any:
 
 def load_figures_info(
     log_path: Path,
-) -> dict[str, list[tuple[int, Path | bytes, bool]]]:
-    """Load all figure data and metadata.
+) -> dict[str, list[tuple[int, Path, bool]]]:
+    """Load figure metadata (no data loaded until rendered).
 
-    Returns dict mapping tag to list of (iteration, data_bytes,
+    Returns dict mapping tag to list of (iteration, file_path,
     interactive).
     """
-    figures: dict[str, list[tuple[int, Path | bytes, bool]]] = {}
+    figures: dict[str, list[tuple[int, Path, bool]]] = {}
 
     events_path = log_path / EVENTS_FILE
     if not events_path.exists():
@@ -212,10 +212,11 @@ def load_figures_info(
                 tag = event.figure.tag
                 if tag not in figures:
                     figures[tag] = []
+                fig_path = log_path / event.figure.path
                 figures[tag].append(
                     (
                         event.iteration,
-                        event.figure.data,
+                        fig_path,
                         event.figure.interactive,
                     )
                 )

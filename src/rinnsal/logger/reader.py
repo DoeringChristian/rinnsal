@@ -89,11 +89,11 @@ class LogReader:
         )
         self._text_cache: dict[str, list[tuple[int, str]]] | None = None
         self._figures_cache: (
-            dict[str, list[tuple[int, bytes]]] | None
-        ) = None
+            dict[str, list[tuple[int, str, bool]]] | None
+        ) = None  # (it, rel_path, interactive)
         self._checkpoints_cache: (
-            dict[str, list[tuple[int, bytes]]] | None
-        ) = None
+            dict[str, list[tuple[int, str]]] | None
+        ) = None  # (it, rel_path)
         self._loaded = False
 
     def _load_events(self) -> None:
@@ -139,7 +139,7 @@ class LogReader:
                 if tag not in self._figures_cache:
                     self._figures_cache[tag] = []
                 self._figures_cache[tag].append(
-                    (it, event.figure.data)
+                    (it, event.figure.path, event.figure.interactive)
                 )
 
             elif data_type == "checkpoint":
@@ -147,7 +147,7 @@ class LogReader:
                 if tag not in self._checkpoints_cache:
                     self._checkpoints_cache[tag] = []
                 self._checkpoints_cache[tag].append(
-                    (it, event.checkpoint.data)
+                    (it, event.checkpoint.path)
                 )
 
         # Sort by iteration
@@ -201,8 +201,8 @@ class LogReader:
         ]:
             if cache:
                 for values in cache.values():
-                    for it, _ in values:
-                        iterations.add(it)
+                    for entry in values:
+                        iterations.add(entry[0])
         return sorted(iterations)
 
     @property
@@ -279,9 +279,11 @@ class LogReader:
             )
         self._load_events()
         if self._figures_cache and tag in self._figures_cache:
-            for it, data in self._figures_cache[tag]:
+            for it, rel_path, _interactive in self._figures_cache[tag]:
                 if it == iteration:
-                    return cloudpickle.loads(data)
+                    fig_path = self._log_dir / rel_path
+                    with open(fig_path, "rb") as f:
+                        return cloudpickle.load(f)
         raise FileNotFoundError(
             f"Figure not found: {tag} at iteration {iteration}"
         )
@@ -293,7 +295,7 @@ class LogReader:
             )
         self._load_events()
         if self._figures_cache and tag in self._figures_cache:
-            return [it for it, _ in self._figures_cache[tag]]
+            return [it for it, _, _ in self._figures_cache[tag]]
         return []
 
     def figures(
@@ -316,9 +318,11 @@ class LogReader:
             self._checkpoints_cache
             and tag in self._checkpoints_cache
         ):
-            for it, data in self._checkpoints_cache[tag]:
+            for it, rel_path in self._checkpoints_cache[tag]:
                 if it == iteration:
-                    return cloudpickle.loads(data)
+                    ckpt_path = self._log_dir / rel_path
+                    with open(ckpt_path, "rb") as f:
+                        return cloudpickle.load(f)
         raise FileNotFoundError(
             f"Checkpoint not found: {tag} at iteration {iteration}"
         )
@@ -351,8 +355,8 @@ class LogReader:
             and tag in self._checkpoints_cache
         ):
             return [
-                (it, cloudpickle.loads(data))
-                for it, data in self._checkpoints_cache[tag]
+                (it, self.load_checkpoint(tag, it))
+                for it, _ in self._checkpoints_cache[tag]
             ]
         return []
 
