@@ -16,12 +16,13 @@ class ProgressState:
     passed: int = 0
     failed: int = 0
     cached: int = 0
+    skipped: int = 0
     current_task: str = ""
     start_time: float = field(default_factory=time.time)
 
     @property
     def completed(self) -> int:
-        return self.passed + self.failed + self.cached
+        return self.passed + self.failed + self.cached + self.skipped
 
     @property
     def percentage(self) -> float:
@@ -78,6 +79,12 @@ class ProgressBar:
         self._state.current_task = ""
         self._render()
 
+    def skip(self, task_name: str) -> None:
+        """Mark a task as skipped (dependency failed)."""
+        self._state.skipped += 1
+        self._state.current_task = ""
+        self._render()
+
     def finish(self) -> None:
         """Finish progress tracking and render final state."""
         self._state.current_task = ""
@@ -102,6 +109,8 @@ class ProgressBar:
             parts.append(f"{state.cached} cached")
         if state.failed:
             parts.append(f"{state.failed} failed")
+        if state.skipped:
+            parts.append(f"{state.skipped} skipped")
         stats = ", ".join(parts) if parts else ""
 
         if state.current_task and not final:
@@ -139,6 +148,10 @@ class SilentProgress:
 
     def fail(self, task_name: str) -> None:
         self._state.failed += 1
+        self._state.current_task = ""
+
+    def skip(self, task_name: str) -> None:
+        self._state.skipped += 1
         self._state.current_task = ""
 
     def finish(self) -> None:

@@ -217,8 +217,20 @@ class FlowDef:
                 progress = SilentProgress(total=len(ordered))
 
             # Evaluate all tasks with progress
+            # Track failed tasks to skip dependents
             engine = get_engine()
+            failed_hashes: set[str] = set()
+            errors: list[tuple[str, Exception]] = []
+
             for expr in ordered:
+                # Check if any dependency has failed
+                deps = dag.get_dependencies(expr.hash)
+                if deps & failed_hashes:
+                    # Skip this task - a dependency failed
+                    failed_hashes.add(expr.hash)
+                    progress.skip(expr.task_name)
+                    continue
+
                 if expr.is_evaluated:
                     # Already evaluated (cached in memory)
                     progress.complete(expr.task_name, cached=True)
@@ -228,11 +240,21 @@ class FlowDef:
                     try:
                         engine.evaluate(expr)
                         progress.complete(expr.task_name, cached=was_cached)
-                    except Exception:
+                    except Exception as e:
+                        failed_hashes.add(expr.hash)
+                        errors.append((expr.task_name, e))
                         progress.fail(expr.task_name)
-                        raise
 
             progress.finish()
+
+            # Report errors at the end
+            if errors:
+                if len(errors) == 1:
+                    raise errors[0][1]
+                msg = f"{len(errors)} tasks failed:\n"
+                for name, err in errors:
+                    msg += f"  - {name}: {err}\n"
+                raise RuntimeError(msg)
 
             # Create and store result
             result = FlowResult(tasks, self.name)
