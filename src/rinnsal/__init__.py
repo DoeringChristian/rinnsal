@@ -2,7 +2,7 @@
 
 from rinnsal.core.task import task
 from rinnsal.core.flow import flow, set_progress
-from rinnsal.core.types import Config
+from rinnsal.core.types import Config, to_dict
 from rinnsal.core.registry_build import register, build
 from rinnsal.runtime.engine import eval
 
@@ -11,6 +11,7 @@ __all__ = [
     "flow",
     "eval",
     "Config",
+    "to_dict",
     "register",
     "build",
     "set_progress",

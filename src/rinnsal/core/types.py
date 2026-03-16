@@ -8,6 +8,21 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Generic, Iterator, TypeVar, overload
 
+import yaml
+
+
+def to_dict(obj: Any) -> Any:
+    """Recursively convert Config objects to dicts."""
+    if isinstance(obj, Config):
+        return {k: to_dict(v) for k, v in obj._data.items()}
+    elif isinstance(obj, dict):
+        return {k: to_dict(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [to_dict(v) for v in obj]
+    elif isinstance(obj, tuple):
+        return tuple(to_dict(v) for v in obj)
+    return obj
+
 
 @dataclass
 class Config:
@@ -19,10 +34,10 @@ class Config:
     _data: dict[str, Any] = field(default_factory=dict)
 
     def __init__(
-        self, data: dict[str, Any] | None = None, **kwargs: Any
+        self, _dict: dict[str, Any] | None = None, **kwargs: Any
     ) -> None:
-        if data is not None:
-            self._data = dict(data)
+        if _dict is not None:
+            self._data = dict(_dict)
         else:
             self._data = {}
         self._data.update(kwargs)
@@ -57,7 +72,9 @@ class Config:
         return len(self._data)
 
     def __repr__(self) -> str:
-        return f"Config({self._data!r})"
+        return yaml.dump(
+            to_dict(self), default_flow_style=False, sort_keys=False
+        ).rstrip("\n")
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, Config):
