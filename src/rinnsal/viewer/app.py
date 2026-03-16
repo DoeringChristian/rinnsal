@@ -845,21 +845,13 @@ def FiguresPanel():
 
 @solara.component
 def InteractiveFigure(fig_data: Path | bytes):
-    """Display a matplotlib figure interactively using ipympl."""
-    import matplotlib
-
-    matplotlib.use("module://ipympl.backend_nbagg")
-    from ipympl.backend_nbagg import Canvas, FigureManager
-
+    """Display a matplotlib figure interactively."""
     mpl_fig = load_figure(fig_data)
     if mpl_fig is None:
         solara.Text("Loading figure...")
         return
 
-    canvas = Canvas(mpl_fig)
-    manager = FigureManager(canvas, 0)
-
-    solara.display(canvas)
+    solara.FigureMatplotlib(mpl_fig)
 
 
 @solara.component

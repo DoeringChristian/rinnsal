@@ -248,20 +248,12 @@ class Logger:
     ) -> None:
         from rinnsal.logger.events_pb2 import Event, Figure
 
-        # Write figure data to a separate file for lazy loading
-        fig_dir = self._log_dir / str(it) / "figures"
-        fig_dir.mkdir(parents=True, exist_ok=True)
-        fig_path = fig_dir / f"{tag}.cpkl"
-        rel_path = f"{it}/figures/{tag}.cpkl"
-        with open(fig_path, "wb") as f:
-            cloudpickle.dump(figure, f)
-
-        # Store only the reference in events.pb
+        data = cloudpickle.dumps(figure)
         event = Event()
         event.timestamp = ts
         event.iteration = it
         event.figure.CopyFrom(
-            Figure(tag=tag, path=rel_path, interactive=interactive)
+            Figure(tag=tag, data=data, interactive=interactive)
         )
         self._event_writer.write(event)
 
@@ -270,21 +262,11 @@ class Logger:
     ) -> None:
         from rinnsal.logger.events_pb2 import Checkpoint, Event
 
-        # Write checkpoint data to a separate file
-        ckpt_dir = self._log_dir / str(it) / "checkpoints"
-        ckpt_dir.mkdir(parents=True, exist_ok=True)
-        ckpt_path = ckpt_dir / f"{tag}.cpkl"
-        rel_path = f"{it}/checkpoints/{tag}.cpkl"
-        with open(ckpt_path, "wb") as f:
-            cloudpickle.dump(obj, f)
-
-        # Store only the reference in events.pb
+        data = cloudpickle.dumps(obj)
         event = Event()
         event.timestamp = ts
         event.iteration = it
-        event.checkpoint.CopyFrom(
-            Checkpoint(tag=tag, path=rel_path)
-        )
+        event.checkpoint.CopyFrom(Checkpoint(tag=tag, data=data))
         self._event_writer.write(event)
 
     def __enter__(self) -> Logger:

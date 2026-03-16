@@ -89,11 +89,11 @@ class LogReader:
         )
         self._text_cache: dict[str, list[tuple[int, str]]] | None = None
         self._figures_cache: (
-            dict[str, list[tuple[int, str, bool]]] | None
-        ) = None  # (it, rel_path, interactive)
+            dict[str, list[tuple[int, bytes]]] | None
+        ) = None
         self._checkpoints_cache: (
-            dict[str, list[tuple[int, str]]] | None
-        ) = None  # (it, rel_path)
+            dict[str, list[tuple[int, bytes]]] | None
+        ) = None
         self._loaded = False
 
     def _load_events(self) -> None:
@@ -139,7 +139,7 @@ class LogReader:
                 if tag not in self._figures_cache:
                     self._figures_cache[tag] = []
                 self._figures_cache[tag].append(
-                    (it, event.figure.path, event.figure.interactive)
+                    (it, event.figure.data)
                 )
 
             elif data_type == "checkpoint":
@@ -147,7 +147,7 @@ class LogReader:
                 if tag not in self._checkpoints_cache:
                     self._checkpoints_cache[tag] = []
                 self._checkpoints_cache[tag].append(
-                    (it, event.checkpoint.path)
+                    (it, event.checkpoint.data)
                 )
 
         # Sort by iteration
@@ -279,11 +279,9 @@ class LogReader:
             )
         self._load_events()
         if self._figures_cache and tag in self._figures_cache:
-            for it, rel_path, _interactive in self._figures_cache[tag]:
+            for it, data in self._figures_cache[tag]:
                 if it == iteration:
-                    fig_path = self._log_dir / rel_path
-                    with open(fig_path, "rb") as f:
-                        return cloudpickle.load(f)
+                    return cloudpickle.loads(data)
         raise FileNotFoundError(
             f"Figure not found: {tag} at iteration {iteration}"
         )
@@ -295,7 +293,7 @@ class LogReader:
             )
         self._load_events()
         if self._figures_cache and tag in self._figures_cache:
-            return [it for it, _, _ in self._figures_cache[tag]]
+            return [it for it, _ in self._figures_cache[tag]]
         return []
 
     def figures(
@@ -318,11 +316,9 @@ class LogReader:
             self._checkpoints_cache
             and tag in self._checkpoints_cache
         ):
-            for it, rel_path in self._checkpoints_cache[tag]:
+            for it, data in self._checkpoints_cache[tag]:
                 if it == iteration:
-                    ckpt_path = self._log_dir / rel_path
-                    with open(ckpt_path, "rb") as f:
-                        return cloudpickle.load(f)
+                    return cloudpickle.loads(data)
         raise FileNotFoundError(
             f"Checkpoint not found: {tag} at iteration {iteration}"
         )

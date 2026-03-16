@@ -36,15 +36,15 @@ message Text {
   string value = 2;
 }
 
-// A figure reference (data stored in separate .cpkl file)
+// A figure (matplotlib figure serialized with cloudpickle)
 message Figure {
   string tag = 1;
-  string path = 2;  // relative path to .cpkl file
+  bytes data = 2;  // cloudpickle serialized figure
   bool interactive = 3;
 }
 
-// A checkpoint reference (data stored in separate .cpkl file)
+// A checkpoint (arbitrary object serialized with cloudpickle)
 message Checkpoint {
   string tag = 1;
-  string path = 2;  // relative path to .cpkl file
+  bytes data = 2;  // cloudpickle serialized object
 }
