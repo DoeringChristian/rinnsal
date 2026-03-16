@@ -4,12 +4,19 @@ version = "0.1.0"
 description = "A declarative DAG execution framework for Python"
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = ["cloudpickle>=3.0", "pyyaml>=6.0"]
+dependencies = ["cloudpickle>=3.0", "pyyaml>=6.0", "protobuf>=4.0"]
 
 [project.optional-dependencies]
 ssh = ["asyncssh>=2.14"]
 ray = ["ray>=2.9"]
-all = ["rinnsal[ssh,ray]"]
+viewer = [
+    "solara[server]>=1.0",
+    "matplotlib>=3.0",
+    "ipympl>=0.9",
+    "bqplot>=0.12",
+    "anywidget>=0.9",
+]
+all = ["rinnsal[ssh,ray,viewer]"]
 
 [dependency-groups]
 dev = [
@@ -20,6 +27,9 @@ dev = [
     "ruff>=0.3",
     "black>=24.0",
 ]
+
+[project.scripts]
+rinnsal-viewer = "rinnsal.viewer:main"
 
 [build-system]
 requires = ["uv_build>=0.10.10,<0.11.0"]

@@ -1,0 +1,531 @@
+"""Reader for exploring and loading rinnsal logs."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+
+import cloudpickle
+
+from rinnsal.logger.logger import (
+    EVENTS_FILE,
+    MARKER_FILE,
+    SCALARS_FILE,
+    TEXT_FILE,
+)
+
+
+class LazyFigure:
+    """A lazy proxy for a pickled figure.
+
+    The actual figure is only loaded when you access any attribute,
+    call a method, or pass it to a function that inspects it.
+    """
+
+    def __init__(self, loader):
+        object.__setattr__(self, "_loader", loader)
+        object.__setattr__(self, "_obj", None)
+        object.__setattr__(self, "_loaded", False)
+
+    def _resolve(self):
+        if not object.__getattribute__(self, "_loaded"):
+            obj = object.__getattribute__(self, "_loader")()
+            object.__setattr__(self, "_obj", obj)
+            object.__setattr__(self, "_loaded", True)
+        return object.__getattribute__(self, "_obj")
+
+    def __getattr__(self, name):
+        return getattr(self._resolve(), name)
+
+    def __setattr__(self, name, value):
+        setattr(self._resolve(), name, value)
+
+    def __repr__(self):
+        return repr(self._resolve())
+
+    def __str__(self):
+        return str(self._resolve())
+
+    def __iter__(self):
+        return iter(self._resolve())
+
+    def __call__(self, *args, **kwargs):
+        return self._resolve()(*args, **kwargs)
+
+    def __getitem__(self, key):
+        return self._resolve()[key]
+
+    def __len__(self):
+        return len(self._resolve())
+
+    def __bool__(self):
+        return bool(self._resolve())
+
+
+class LogReader:
+    """Reader for exploring and loading rinnsal logs.
+
+    Args:
+        log_dir: Path to a log directory (single run or parent of multiple runs).
+
+    Example:
+        # Load a single run
+        reader = LogReader("/path/to/logs/run1")
+        print(reader.iterations)  # [0, 1, 2, ...]
+        print(reader.scalar_tags)  # ['loss', 'accuracy', ...]
+
+        # Load scalars as time series
+        loss = reader.load_scalars("loss")  # [(0, 0.5), (1, 0.4), ...]
+
+        # Load a figure
+        fig = reader.load_figure("plot", iteration=100)
+
+        # Discover and load multiple runs
+        reader = LogReader("/path/to/logs")
+        print(reader.runs)  # ['run1', 'run2', ...]
+        run1 = reader.get_run("run1")
+    """
+
+    def __init__(self, log_dir: str | Path):
+        self._log_dir = Path(log_dir)
+        if not self._log_dir.exists():
+            raise FileNotFoundError(f"Log directory not found: {log_dir}")
+        # Cache for parsed data
+        self._scalars_cache: dict[str, list[tuple[int, float]]] | None = None
+        self._text_cache: dict[str, list[tuple[int, str]]] | None = None
+        self._figures_cache: dict[str, list[tuple[int, bytes]]] | None = None
+        self._checkpoints_cache: dict[str, list[tuple[int, bytes]]] | None = None
+        self._protobuf_loaded = False
+
+    def _has_protobuf(self) -> bool:
+        """Check if this run uses protobuf format."""
+        return (self._log_dir / EVENTS_FILE).exists()
+
+    def _load_protobuf_events(self) -> None:
+        """Load all events from protobuf file into caches."""
+        if self._protobuf_loaded:
+            return
+
+        from rinnsal.logger.event_file import EventFileReader
+
+        events_path = self._log_dir / EVENTS_FILE
+        if not events_path.exists():
+            self._protobuf_loaded = True
+            return
+
+        self._scalars_cache = {}
+        self._text_cache = {}
+        self._figures_cache = {}
+        self._checkpoints_cache = {}
+
+        reader = EventFileReader(events_path)
+        for event in reader:
+            it = event.iteration
+            data_type = event.WhichOneof("data")
+
+            if data_type == "scalar":
+                tag = event.scalar.tag
+                if tag not in self._scalars_cache:
+                    self._scalars_cache[tag] = []
+                self._scalars_cache[tag].append((it, event.scalar.value))
+
+            elif data_type == "text":
+                tag = event.text.tag
+                if tag not in self._text_cache:
+                    self._text_cache[tag] = []
+                self._text_cache[tag].append((it, event.text.value))
+
+            elif data_type == "figure":
+                tag = event.figure.tag
+                if tag not in self._figures_cache:
+                    self._figures_cache[tag] = []
+                self._figures_cache[tag].append((it, event.figure.data))
+
+            elif data_type == "checkpoint":
+                tag = event.checkpoint.tag
+                if tag not in self._checkpoints_cache:
+                    self._checkpoints_cache[tag] = []
+                self._checkpoints_cache[tag].append((it, event.checkpoint.data))
+
+        # Sort by iteration
+        for cache in [
+            self._scalars_cache,
+            self._text_cache,
+            self._figures_cache,
+            self._checkpoints_cache,
+        ]:
+            for tag in cache:
+                cache[tag].sort(key=lambda x: x[0])
+
+        self._protobuf_loaded = True
+
+    @property
+    def path(self) -> Path:
+        """Return the log directory path."""
+        return self._log_dir
+
+    @property
+    def is_run(self) -> bool:
+        """Check if this directory is a rinnsal run (has marker file)."""
+        return (self._log_dir / MARKER_FILE).exists()
+
+    @property
+    def runs(self) -> list[str]:
+        """Discover all run names under this directory."""
+        if self.is_run:
+            return ["."]
+        runs = []
+        for item in self._log_dir.rglob(MARKER_FILE):
+            run_path = item.parent
+            runs.append(str(run_path.relative_to(self._log_dir)))
+        return sorted(runs)
+
+    def get_run(self, name: str) -> LogReader:
+        """Get a LogReader for a specific run."""
+        if name == ".":
+            return self
+        return LogReader(self._log_dir / name)
+
+    def _load_scalars(self) -> dict[str, list[tuple[int, float]]]:
+        """Load and cache all scalars."""
+        # Try protobuf first
+        if self._has_protobuf():
+            self._load_protobuf_events()
+            return self._scalars_cache or {}
+
+        # Fall back to JSONL
+        if self._scalars_cache is not None:
+            return self._scalars_cache
+
+        self._scalars_cache = {}
+        scalars_path = self._log_dir / SCALARS_FILE
+        if scalars_path.exists():
+            with open(scalars_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        tag = entry["tag"]
+                        if tag not in self._scalars_cache:
+                            self._scalars_cache[tag] = []
+                        self._scalars_cache[tag].append((entry["it"], entry["value"]))
+                    except (json.JSONDecodeError, KeyError):
+                        continue
+
+        # Sort each tag's values by iteration
+        for tag in self._scalars_cache:
+            self._scalars_cache[tag].sort(key=lambda x: x[0])
+
+        return self._scalars_cache
+
+    def _load_text(self) -> dict[str, list[tuple[int, str]]]:
+        """Load and cache all text."""
+        # Try protobuf first
+        if self._has_protobuf():
+            self._load_protobuf_events()
+            return self._text_cache or {}
+
+        # Fall back to JSONL
+        if self._text_cache is not None:
+            return self._text_cache
+
+        self._text_cache = {}
+        text_path = self._log_dir / TEXT_FILE
+        if text_path.exists():
+            with open(text_path) as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        entry = json.loads(line)
+                        tag = entry["tag"]
+                        if tag not in self._text_cache:
+                            self._text_cache[tag] = []
+                        self._text_cache[tag].append((entry["it"], entry["text"]))
+                    except (json.JSONDecodeError, KeyError):
+                        continue
+
+        # Sort each tag's values by iteration
+        for tag in self._text_cache:
+            self._text_cache[tag].sort(key=lambda x: x[0])
+
+        return self._text_cache
+
+    @property
+    def iterations(self) -> list[int]:
+        """Get all iteration numbers in this run."""
+        if not self.is_run:
+            raise ValueError("Not a run directory. Use get_run() first.")
+
+        iterations = set()
+
+        # Get iterations from scalars
+        for values in self._load_scalars().values():
+            for it, _ in values:
+                iterations.add(it)
+
+        # Get iterations from text
+        for values in self._load_text().values():
+            for it, _ in values:
+                iterations.add(it)
+
+        # If using protobuf, also get from figures/checkpoints cache
+        if self._has_protobuf():
+            self._load_protobuf_events()
+            if self._figures_cache:
+                for values in self._figures_cache.values():
+                    for it, _ in values:
+                        iterations.add(it)
+            if self._checkpoints_cache:
+                for values in self._checkpoints_cache.values():
+                    for it, _ in values:
+                        iterations.add(it)
+        else:
+            # Get iterations from directories (figures, checkpoints)
+            for d in self._log_dir.iterdir():
+                if d.is_dir() and d.name.isdigit():
+                    iterations.add(int(d.name))
+
+        return sorted(iterations)
+
+    @property
+    def scalar_tags(self) -> set[str]:
+        """Get all scalar tags logged in this run."""
+        if not self.is_run:
+            raise ValueError("Not a run directory. Use get_run() first.")
+        return set(self._load_scalars().keys())
+
+    @property
+    def text_tags(self) -> set[str]:
+        """Get all text tags logged in this run."""
+        if not self.is_run:
+            raise ValueError("Not a run directory. Use get_run() first.")
+        return set(self._load_text().keys())
+
+    @property
+    def figure_tags(self) -> set[str]:
+        """Get all figure tags logged in this run."""
+        if not self.is_run:
+            raise ValueError("Not a run directory. Use get_run() first.")
+
+        if self._has_protobuf():
+            self._load_protobuf_events()
+            return set(self._figures_cache.keys()) if self._figures_cache else set()
+
+        tags = set()
+        for it in self.iterations:
+            figures_dir = self._log_dir / str(it) / "figures"
+            if figures_dir.exists():
+                for fig_path in figures_dir.glob("*.cpkl"):
+                    tags.add(fig_path.stem)
+        return tags
+
+    @property
+    def checkpoint_tags(self) -> set[str]:
+        """Get all checkpoint tags logged in this run."""
+        if not self.is_run:
+            raise ValueError("Not a run directory. Use get_run() first.")
+
+        if self._has_protobuf():
+            self._load_protobuf_events()
+            return (
+                set(self._checkpoints_cache.keys())
+                if self._checkpoints_cache
+                else set()
+            )
+
+        tags = set()
+        for it in self.iterations:
+            checkpoints_dir = self._log_dir / str(it) / "checkpoints"
+            if checkpoints_dir.exists():
+                for ckpt_path in checkpoints_dir.glob("*.cpkl"):
+                    tags.add(ckpt_path.stem)
+        return tags
+
+    def load_scalars(self, tag: str) -> list[tuple[int, float]]:
+        """Load scalar values for a tag as (iteration, value) pairs."""
+        if not self.is_run:
+            raise ValueError("Not a run directory. Use get_run() first.")
+        return self._load_scalars().get(tag, [])
+
+    def scalars(self, tag: str) -> tuple[list[int], list[float]]:
+        """Load scalar values as separate iteration and value lists.
+
+        Example:
+            its, losses = reader.scalars("loss")
+            plt.plot(its, losses)
+        """
+        data = self.load_scalars(tag)
+        if not data:
+            return [], []
+        its, vals = zip(*data)
+        return list(its), list(vals)
+
+    def load_text(self, tag: str) -> list[tuple[int, str]]:
+        """Load text values for a tag as (iteration, text) pairs."""
+        if not self.is_run:
+            raise ValueError("Not a run directory. Use get_run() first.")
+        return self._load_text().get(tag, [])
+
+    def load_figure(self, tag: str, iteration: int) -> Any:
+        """Load a figure object for a specific tag and iteration."""
+        if not self.is_run:
+            raise ValueError("Not a run directory. Use get_run() first.")
+
+        if self._has_protobuf():
+            self._load_protobuf_events()
+            if self._figures_cache and tag in self._figures_cache:
+                for it, data in self._figures_cache[tag]:
+                    if it == iteration:
+                        return cloudpickle.loads(data)
+            raise FileNotFoundError(f"Figure not found: {tag} at iteration {iteration}")
+
+        fig_path = self._log_dir / str(iteration) / "figures" / f"{tag}.cpkl"
+        if not fig_path.exists():
+            raise FileNotFoundError(f"Figure not found: {tag} at iteration {iteration}")
+        with open(fig_path, "rb") as f:
+            return cloudpickle.load(f)
+
+    def figure_iterations(self, tag: str) -> list[int]:
+        """Get all iterations where a figure tag was logged."""
+        if not self.is_run:
+            raise ValueError("Not a run directory. Use get_run() first.")
+
+        if self._has_protobuf():
+            self._load_protobuf_events()
+            if self._figures_cache and tag in self._figures_cache:
+                return [it for it, _ in self._figures_cache[tag]]
+            return []
+
+        iterations = []
+        for it in self.iterations:
+            fig_path = self._log_dir / str(it) / "figures" / f"{tag}.cpkl"
+            if fig_path.exists():
+                iterations.append(it)
+        return iterations
+
+    def figures(self, tag: str) -> tuple[list[int], list[LazyFigure]]:
+        """Load figures as separate iteration and lazy-figure lists.
+
+        Figures are not deserialized until accessed, so this is cheap to call
+        even for many iterations.
+
+        Example:
+            its, figs = reader.figures("loss_landscape")
+            figs[-1].savefig("last.png")  # only this one gets unpickled
+        """
+        iters = self.figure_iterations(tag)
+        figs = [
+            LazyFigure(lambda it=it: self.load_figure(tag, it)) for it in iters
+        ]
+        return iters, figs
+
+    def load_checkpoint(self, tag: str, iteration: int) -> Any:
+        """Load a checkpoint object for a specific tag and iteration."""
+        if not self.is_run:
+            raise ValueError("Not a run directory. Use get_run() first.")
+
+        if self._has_protobuf():
+            self._load_protobuf_events()
+            if self._checkpoints_cache and tag in self._checkpoints_cache:
+                for it, data in self._checkpoints_cache[tag]:
+                    if it == iteration:
+                        return cloudpickle.loads(data)
+            raise FileNotFoundError(
+                f"Checkpoint not found: {tag} at iteration {iteration}"
+            )
+
+        ckpt_path = self._log_dir / str(iteration) / "checkpoints" / f"{tag}.cpkl"
+        if not ckpt_path.exists():
+            raise FileNotFoundError(
+                f"Checkpoint not found: {tag} at iteration {iteration}"
+            )
+        with open(ckpt_path, "rb") as f:
+            return cloudpickle.load(f)
+
+    def checkpoint_iterations(self, tag: str) -> list[int]:
+        """Get all iterations where a checkpoint tag was logged."""
+        if not self.is_run:
+            raise ValueError("Not a run directory. Use get_run() first.")
+
+        if self._has_protobuf():
+            self._load_protobuf_events()
+            if self._checkpoints_cache and tag in self._checkpoints_cache:
+                return [it for it, _ in self._checkpoints_cache[tag]]
+            return []
+
+        iterations = []
+        for it in self.iterations:
+            ckpt_path = self._log_dir / str(it) / "checkpoints" / f"{tag}.cpkl"
+            if ckpt_path.exists():
+                iterations.append(it)
+        return iterations
+
+    def load_checkpoints(self, tag: str) -> list[tuple[int, Any]]:
+        """Load all checkpoint values for a tag as (iteration, value) pairs."""
+        if not self.is_run:
+            raise ValueError("Not a run directory. Use get_run() first.")
+
+        if self._has_protobuf():
+            self._load_protobuf_events()
+            if self._checkpoints_cache and tag in self._checkpoints_cache:
+                return [
+                    (it, cloudpickle.loads(data))
+                    for it, data in self._checkpoints_cache[tag]
+                ]
+            return []
+
+        values = []
+        for it in self.checkpoint_iterations(tag):
+            values.append((it, self.load_checkpoint(tag, it)))
+        return values
+
+    def __getitem__(self, tag: str) -> tuple[int, Any]:
+        """Get the last logged value for a tag.
+
+        Searches scalars, text, figures, and checkpoints in that order.
+        Returns (iteration, value) tuple for the most recent entry.
+
+        Example:
+            it, loss = reader["loss"]
+            it, fig = reader["loss_landscape"]
+        """
+        if not self.is_run:
+            raise ValueError("Not a run directory. Use get_run() first.")
+
+        # Check scalars
+        if tag in self.scalar_tags:
+            data = self.load_scalars(tag)
+            if data:
+                return data[-1]
+
+        # Check text
+        if tag in self.text_tags:
+            data = self.load_text(tag)
+            if data:
+                return data[-1]
+
+        # Check figures
+        if tag in self.figure_tags:
+            iterations = self.figure_iterations(tag)
+            if iterations:
+                last_it = iterations[-1]
+                return (last_it, self.load_figure(tag, last_it))
+
+        # Check checkpoints
+        if tag in self.checkpoint_tags:
+            iterations = self.checkpoint_iterations(tag)
+            if iterations:
+                last_it = iterations[-1]
+                return (last_it, self.load_checkpoint(tag, last_it))
+
+        raise KeyError(f"Tag not found: {tag}")
+
+    def __repr__(self) -> str:
+        if self.is_run:
+            return f"LogReader('{self._log_dir}', iterations={len(self.iterations)})"
+        return f"LogReader('{self._log_dir}', runs={self.runs})"
