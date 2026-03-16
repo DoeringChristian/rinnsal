@@ -117,7 +117,24 @@ Built-in flags work automatically:
 python script.py -s              # Show task output (no capture)
 python script.py --no-cache      # Disable caching
 python script.py --executor subprocess  # Use subprocess executor
+python script.py --filter "train.*"     # Only run matching tasks
 ```
+
+### Task Filtering
+
+Re-run specific tasks without re-executing the entire flow:
+
+```bash
+# Only execute tasks matching the pattern
+python script.py --filter "train.*"
+```
+
+When using `--filter`:
+- Tasks matching the regex pattern are executed
+- Dependencies of matched tasks are loaded from cache
+- Non-matching tasks that aren't dependencies are skipped
+
+This requires a previous full run to populate the cache for dependencies.
 
 ### Caching
 

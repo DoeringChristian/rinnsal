@@ -71,9 +71,9 @@ def run_flow_from_cli(flow: FlowDef, args: list[str] | None = None) -> Any:
     set_engine(engine)
 
     try:
-        # Handle spin mode
-        if builtin_flags["spin"]:
-            return _run_spin_mode(flow, builtin_flags["spin"], user_kwargs)
+        # Handle filter mode
+        if builtin_flags["filter"]:
+            return _run_filter_mode(flow, builtin_flags["filter"], user_kwargs)
 
         # Normal execution
         return flow(**user_kwargs)
@@ -106,23 +106,36 @@ def _create_executor(name: str, capture: bool = True) -> Any:
         raise ValueError(f"Unknown executor: {name}")
 
 
-def _run_spin_mode(
-    flow: FlowDef, task_name: str, kwargs: dict[str, Any]
+def _run_filter_mode(
+    flow: FlowDef, pattern: str, kwargs: dict[str, Any]
 ) -> Any:
-    """Run a flow in spin mode, re-executing only the specified task.
+    """Run a flow with task filtering.
 
-    All other tasks load their most recent cached result.
+    Only tasks matching the pattern are executed. Dependencies of matched
+    tasks are loaded from cache. Tasks that don't match and aren't
+    dependencies are skipped.
+
+    Args:
+        flow: The flow to run
+        pattern: Regex pattern to match task names
+        kwargs: Flow arguments
+
+    Returns:
+        FlowResult containing only the matched tasks
     """
+    import re
+
+    from rinnsal.core.flow import FlowResult
     from rinnsal.core.graph import DAG
     from rinnsal.core.registry import flow_scope
-    from rinnsal.persistence.file_store import get_database
+    from rinnsal.progress.bar import ProgressBar, SilentProgress
     from rinnsal.runtime.engine import get_engine
 
     engine = get_engine()
     database = engine.database
 
     if database is None:
-        raise ValueError("Spin mode requires a database for cached results")
+        raise ValueError("Filter mode requires a database for cached results")
 
     # Build the DAG
     with flow_scope() as ctx:
@@ -132,45 +145,78 @@ def _run_spin_mode(
     if not tasks:
         raise ValueError("Flow produced no tasks")
 
-    # Find the target task
-    target_task = None
-    for task in tasks:
-        if task.task_name == task_name or task.func.__name__ == task_name:
-            target_task = task
-            break
-
-    if target_task is None:
-        available = [t.task_name for t in tasks]
-        raise ValueError(
-            f"Task '{task_name}' not found. Available tasks: {available}"
-        )
-
-    # Build DAG
+    # Build DAG and get topological order
     dag = DAG.from_expressions(tasks)
     ordered = dag.topological_sort()
 
-    # Load all tasks from cache except the target
+    # Find matching tasks (regex on task_name or func.__name__)
+    regex = re.compile(pattern)
+    matched_hashes = {
+        t.hash
+        for t in tasks
+        if regex.search(t.task_name) or regex.search(t.func.__name__)
+    }
+
+    if not matched_hashes:
+        available = [t.task_name for t in tasks]
+        raise ValueError(
+            f"No tasks match pattern '{pattern}'. "
+            f"Available tasks: {available}"
+        )
+
+    # Find all dependencies of matched tasks (recursive)
+    required_dep_hashes: set[str] = set()
+
+    def collect_deps(task_hash: str) -> None:
+        for dep_hash in dag.get_dependencies(task_hash):
+            if dep_hash not in required_dep_hashes:
+                required_dep_hashes.add(dep_hash)
+                collect_deps(dep_hash)
+
+    for h in matched_hashes:
+        collect_deps(h)
+
+    # Setup progress tracking
+    from rinnsal.core.flow import get_progress
+
+    tasks_to_process = [
+        e
+        for e in ordered
+        if e.hash in matched_hashes or e.hash in required_dep_hashes
+    ]
+    if get_progress():
+        progress = ProgressBar(total=len(tasks_to_process))
+    else:
+        progress = SilentProgress(total=len(tasks_to_process))
+
+    # Execute in topological order
     for expr in ordered:
-        if expr.hash == target_task.hash:
-            # Skip target - will execute it
-            continue
+        if expr.hash in matched_hashes:
+            # Execute this task (matches filter)
+            progress.start(expr.task_name)
+            engine.evaluate(expr)
+            progress.complete(expr.task_name, cached=False)
 
-        cached = database.fetch_task_result(expr.hash)
-        if cached is None:
-            raise ValueError(
-                f"No cached result for task '{expr.task_name}'. "
-                "Spin mode requires a previous full run."
-            )
+        elif expr.hash in required_dep_hashes:
+            # Load from cache (dependency of matched task)
+            progress.start(expr.task_name)
+            cached = database.fetch_task_result(expr.hash)
+            if cached is None:
+                progress.fail(expr.task_name)
+                raise ValueError(
+                    f"No cached result for dependency '{expr.task_name}'. "
+                    "Run the full flow first to populate the cache."
+                )
+            expr.set_result(cached.result)
+            progress.complete(expr.task_name, cached=True)
 
-        expr.set_result(cached.result)
+        # else: skip (not matched, not a dependency)
 
-    # Execute the target task
-    engine.evaluate(target_task)
+    progress.finish()
 
-    # Create result
-    from rinnsal.core.flow import FlowResult
-
-    return FlowResult(tasks, flow.name)
+    # Return only matched tasks in result
+    matched_tasks = [t for t in tasks if t.hash in matched_hashes]
+    return FlowResult(matched_tasks, flow.name)
 
 
 def main() -> None:

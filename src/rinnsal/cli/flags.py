@@ -11,7 +11,7 @@ def add_builtin_flags(parser: argparse.ArgumentParser) -> None:
 
     Built-in flags:
     - --executor NAME: Select an executor by name
-    - --spin TASK_NAME: Re-run only one task (spin mode)
+    - --filter PATTERN: Only execute tasks matching this pattern
     - -s/--no-capture: Disable stdout/stderr capture
     """
     builtin_group = parser.add_argument_group("rinnsal options")
@@ -25,11 +25,11 @@ def add_builtin_flags(parser: argparse.ArgumentParser) -> None:
     )
 
     builtin_group.add_argument(
-        "--spin",
+        "--filter",
         type=str,
         default=None,
-        metavar="TASK_NAME",
-        help="Re-run only the specified task (spin mode)",
+        metavar="PATTERN",
+        help="Only execute tasks matching this pattern (regex)",
     )
 
     builtin_group.add_argument(
@@ -59,11 +59,11 @@ def extract_builtin_flags(namespace: argparse.Namespace) -> dict[str, Any]:
     """Extract built-in flags from a parsed namespace.
 
     Returns:
-        Dictionary with keys: executor, spin, no_capture, no_cache, db_path
+        Dictionary with keys: executor, filter, no_capture, no_cache, db_path
     """
     return {
         "executor": getattr(namespace, "executor", "inline"),
-        "spin": getattr(namespace, "spin", None),
+        "filter": getattr(namespace, "filter", None),
         "no_capture": getattr(namespace, "no_capture", False),
         "no_cache": getattr(namespace, "no_cache", False),
         "db_path": getattr(namespace, "db_path", ".rinnsal"),
@@ -75,5 +75,5 @@ def remove_builtin_flags(kwargs: dict[str, Any]) -> dict[str, Any]:
 
     Returns a new dict with only user-defined arguments.
     """
-    builtin_keys = {"executor", "spin", "no_capture", "no_cache", "db_path"}
+    builtin_keys = {"executor", "filter", "no_capture", "no_cache", "db_path"}
     return {k: v for k, v in kwargs.items() if k not in builtin_keys}
