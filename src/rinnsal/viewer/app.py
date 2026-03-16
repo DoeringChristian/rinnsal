@@ -852,20 +852,33 @@ _ipympl_backend_set = False
 _fig_num_counter = 0
 
 
+def _ensure_ipympl_backend():
+    """Set the ipympl backend once per process."""
+    global _ipympl_backend_set
+    if not _ipympl_backend_set:
+        import matplotlib
+
+        matplotlib.use("module://ipympl.backend_nbagg")
+        _ipympl_backend_set = True
+
+
 @solara.component
 def InteractiveFigure(data_pickle: bytes):
-    """Display a matplotlib figure interactively using ipympl."""
-    global _ipympl_backend_set, _fig_num_counter
+    """Display a matplotlib figure interactively using ipympl.
 
-    def _create_canvas():
-        global _ipympl_backend_set, _fig_num_counter
-        if not _ipympl_backend_set:
-            import matplotlib
+    The canvas is wrapped in an ipywidgets.Output so that ipympl
+    comm traffic (mouse events, binary image updates) stays inside
+    the Output and never triggers Solara component re-renders.
+    """
+    global _fig_num_counter
 
-            matplotlib.use("module://ipympl.backend_nbagg")
-            _ipympl_backend_set = True
+    def _create_output():
+        global _fig_num_counter
+        _ensure_ipympl_backend()
 
         import cloudpickle
+        import ipywidgets as widgets
+        from IPython.display import display as ipy_display
         from ipympl.backend_nbagg import Canvas, FigureManager
 
         _fig_num_counter += 1
@@ -874,17 +887,21 @@ def InteractiveFigure(data_pickle: bytes):
         FigureManager(canvas, _fig_num_counter)
         canvas.header_visible = False
         canvas.toolbar_visible = True
-        mpl_fig.canvas.draw_idle()
-        return canvas
 
-    canvas = solara.use_memo(
-        _create_canvas, dependencies=[id(data_pickle)]
+        output = widgets.Output()
+        with output:
+            ipy_display(canvas)
+
+        return output
+
+    output = solara.use_memo(
+        _create_output, dependencies=[id(data_pickle)]
     )
-    if canvas is None:
+    if output is None:
         solara.Text("Failed to load figure.")
         return
 
-    solara.display(canvas)
+    solara.display(output)
 
 
 @solara.component
@@ -943,23 +960,15 @@ def Page():
         )
         return
 
-    # Tabs for different views — all panels stay mounted so
-    # use_memo caches and widget state survive tab switches.
-    tab_names = ["Scalars", "Text", "Figures"]
-    panels = [ScalarsPanel, TextPanel, FiguresPanel]
-
+    # Content inside each Tab is wrapped in Vuetify v-tab-item
+    # automatically, keeping all panels mounted across switches.
     with solara.lab.Tabs(value=tab_index):
-        for name in tab_names:
-            solara.lab.Tab(name)
-
-    for i, Panel in enumerate(panels):
-        is_active = tab_index.value == i
-        with solara.Column(
-            style={
-                "display": "block" if is_active else "none",
-            }
-        ):
-            Panel()
+        with solara.lab.Tab("Scalars"):
+            ScalarsPanel()
+        with solara.lab.Tab("Text"):
+            TextPanel()
+        with solara.lab.Tab("Figures"):
+            FiguresPanel()
 
 
 def _find_free_port(start: int, max_attempts: int = 100) -> int:
