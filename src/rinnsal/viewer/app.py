@@ -853,7 +853,6 @@ _fig_num_counter = 0
 
 
 def _ensure_ipympl_backend():
-    """Set the ipympl backend once per process."""
     global _ipympl_backend_set
     if not _ipympl_backend_set:
         import matplotlib
@@ -864,18 +863,12 @@ def _ensure_ipympl_backend():
 
 @solara.component
 def InteractiveFigure(data_pickle: bytes):
-    """Display a matplotlib figure interactively using ipympl.
-
-    The canvas is wrapped in an ipywidgets.Output so that ipympl
-    comm traffic (mouse events, binary image updates) stays inside
-    the Output and never triggers Solara component re-renders.
-    """
+    """Display an interactive matplotlib figure using ipympl."""
     global _fig_num_counter
 
     def _create_output():
         global _fig_num_counter
         _ensure_ipympl_backend()
-
         import cloudpickle
         import ipywidgets as widgets
         from IPython.display import display as ipy_display
@@ -887,11 +880,9 @@ def InteractiveFigure(data_pickle: bytes):
         FigureManager(canvas, _fig_num_counter)
         canvas.header_visible = False
         canvas.toolbar_visible = True
-
         output = widgets.Output()
         with output:
             ipy_display(canvas)
-
         return output
 
     output = solara.use_memo(
@@ -900,7 +891,6 @@ def InteractiveFigure(data_pickle: bytes):
     if output is None:
         solara.Text("Failed to load figure.")
         return
-
     solara.display(output)
 
 
@@ -997,6 +987,8 @@ def run(log_path: str | Path | None = None, port: int = 8765):
         os.environ["RINNSAL_LOG_DIR"] = str(
             Path(log_path).resolve()
         )
+
+    os.environ.setdefault("SOLARA_EXPERIMENTAL_PERFORMANCE", "true")
 
     port = _find_free_port(port)
     print(f"Starting rinnsal viewer on http://localhost:{port}")
