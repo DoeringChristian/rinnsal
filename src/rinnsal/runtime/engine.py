@@ -199,11 +199,31 @@ _default_engine: ExecutionEngine | None = None
 
 
 def get_engine() -> ExecutionEngine:
-    """Get or create the default execution engine."""
+    """Get or create the default execution engine.
+
+    Automatically parses CLI flags (-s, --no-cache, etc.) when creating
+    the default engine.
+    """
     global _default_engine
     if _default_engine is None:
-        _default_engine = ExecutionEngine()
+        _default_engine = _create_default_engine()
     return _default_engine
+
+
+def _create_default_engine() -> ExecutionEngine:
+    """Create the default engine with CLI flag support."""
+    import sys
+
+    # Parse known flags from sys.argv
+    no_capture = "-s" in sys.argv or "--no-capture" in sys.argv
+    no_cache = "--no-cache" in sys.argv
+
+    # Create executor with appropriate capture setting
+    from rinnsal.execution.inline import InlineExecutor
+
+    executor = InlineExecutor(capture=not no_capture)
+
+    return ExecutionEngine(executor=executor, use_cache=not no_cache)
 
 
 def set_engine(engine: ExecutionEngine) -> None:
