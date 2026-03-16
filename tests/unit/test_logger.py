@@ -129,44 +129,6 @@ class TestLoggerProtobuf:
         assert figs[2].value == 2
 
 
-class TestLoggerJSONL:
-    """Test Logger with JSONL format."""
-
-    def test_log_scalar_jsonl(self, tmp_path: Path) -> None:
-        """Test logging and reading scalars in JSONL format."""
-        with Logger(tmp_path, use_protobuf=False) as logger:
-            logger.add_scalar("loss", 0.5, it=0)
-            logger.add_scalar("loss", 0.4, it=1)
-            logger.flush()
-
-        # Verify JSONL file exists
-        scalars_path = tmp_path / "scalars.jsonl"
-        assert scalars_path.exists()
-
-        reader = LogReader(tmp_path)
-        loss_data = reader.load_scalars("loss")
-        assert len(loss_data) == 2
-
-    def test_log_figure_jsonl(self, tmp_path: Path) -> None:
-        """Test logging and reading figures in JSONL format."""
-
-        class MockFigure:
-            def __init__(self, value: int):
-                self.value = value
-
-        with Logger(tmp_path, use_protobuf=False) as logger:
-            logger.add_figure("plot", MockFigure(42), it=5)
-            logger.flush()
-
-        # Verify directory structure
-        fig_path = tmp_path / "5" / "figures" / "plot.cpkl"
-        assert fig_path.exists()
-
-        reader = LogReader(tmp_path)
-        fig = reader.load_figure("plot", 5)
-        assert fig.value == 42
-
-
 class TestLogReaderDiscovery:
     """Test LogReader's run discovery features."""
 

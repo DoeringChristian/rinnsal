@@ -12,6 +12,7 @@ from rinnsal.execution.executor import Executor
 from rinnsal.execution.inline import InlineExecutor
 
 if TYPE_CHECKING:
+    from rinnsal.logger import Logger
     from rinnsal.persistence.database import Database
 
 
@@ -21,6 +22,11 @@ class ExecutionEngine:
     The engine walks the DAG in topological order, resolves dependencies,
     dispatches tasks to an executor, handles retries, and manages results.
     Optionally caches results to a database for persistence.
+
+    When a Logger is provided, task execution events (start, success,
+    failure, stdout/stderr) are logged locally. This works with all
+    executors including SSH and subprocess, since logging happens in
+    the main process — not inside the remote task.
     """
 
     def __init__(
@@ -28,10 +34,12 @@ class ExecutionEngine:
         executor: Executor | None = None,
         database: Database | None = None,
         use_cache: bool = True,
+        logger: Logger | None = None,
     ) -> None:
         self._executor = executor or InlineExecutor()
         self._database = database
         self._use_cache = use_cache
+        self._logger = logger
         self._evaluated: dict[str, Any] = {}
 
     @property
@@ -45,6 +53,10 @@ class ExecutionEngine:
     @property
     def use_cache(self) -> bool:
         return self._use_cache
+
+    @property
+    def logger(self) -> Logger | None:
+        return self._logger
 
     def evaluate(self, *expressions: TaskExpression) -> Any | tuple[Any, ...]:
         """Evaluate one or more task expressions.
@@ -149,6 +161,10 @@ class ExecutionEngine:
     ) -> tuple[Any, str]:
         """Execute a task with retry support.
 
+        When a Logger is attached, logs task events locally. This works
+        with all executors (inline, subprocess, SSH, Ray) since logging
+        happens in the main process after the result is returned.
+
         Returns:
             Tuple of (result, captured_log)
         """
@@ -157,11 +173,33 @@ class ExecutionEngine:
         combined_log = ""
 
         for attempt in range(max_attempts):
+            t0 = datetime.now()
             result = self._executor.execute_sync(
                 expr, resolved_args, resolved_kwargs
             )
+            elapsed = (datetime.now() - t0).total_seconds()
 
             combined_log += result.stdout + result.stderr
+
+            if self._logger is not None:
+                name = expr.task_name
+                if result.success:
+                    self._logger.add_scalar(
+                        f"{name}/duration", elapsed
+                    )
+                    if result.stdout:
+                        self._logger.add_text(
+                            f"{name}/stdout", result.stdout
+                        )
+                    if result.stderr:
+                        self._logger.add_text(
+                            f"{name}/stderr", result.stderr
+                        )
+                else:
+                    self._logger.add_text(
+                        f"{name}/error",
+                        str(result.error),
+                    )
 
             if result.success:
                 return result.value, combined_log
