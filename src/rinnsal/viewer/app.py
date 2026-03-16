@@ -848,22 +848,38 @@ def FiguresPanel():
                     )
 
 
+_ipympl_backend_set = False
+_fig_num_counter = 0
+
+
 @solara.component
 def InteractiveFigure(data_pickle: bytes):
     """Display a matplotlib figure interactively using ipympl."""
-    import cloudpickle
-    import matplotlib
-
-    matplotlib.use("module://ipympl.backend_nbagg")
-    from ipympl.backend_nbagg import Canvas, FigureManager
+    global _ipympl_backend_set, _fig_num_counter
 
     def _create_canvas():
+        global _ipympl_backend_set, _fig_num_counter
+        if not _ipympl_backend_set:
+            import matplotlib
+
+            matplotlib.use("module://ipympl.backend_nbagg")
+            _ipympl_backend_set = True
+
+        import cloudpickle
+        from ipympl.backend_nbagg import Canvas, FigureManager
+
+        _fig_num_counter += 1
         mpl_fig = cloudpickle.loads(data_pickle)
         canvas = Canvas(mpl_fig)
-        FigureManager(canvas, 0)
+        FigureManager(canvas, _fig_num_counter)
+        canvas.header_visible = False
+        canvas.toolbar_visible = True
+        mpl_fig.canvas.draw_idle()
         return canvas
 
-    canvas = solara.use_memo(_create_canvas, dependencies=[id(data_pickle)])
+    canvas = solara.use_memo(
+        _create_canvas, dependencies=[id(data_pickle)]
+    )
     if canvas is None:
         solara.Text("Failed to load figure.")
         return
@@ -927,19 +943,23 @@ def Page():
         )
         return
 
-    # Tabs for different views
+    # Tabs for different views — all panels stay mounted so
+    # use_memo caches and widget state survive tab switches.
     tab_names = ["Scalars", "Text", "Figures"]
+    panels = [ScalarsPanel, TextPanel, FiguresPanel]
 
     with solara.lab.Tabs(value=tab_index):
         for name in tab_names:
             solara.lab.Tab(name)
 
-    if tab_index.value == 0:
-        ScalarsPanel()
-    elif tab_index.value == 1:
-        TextPanel()
-    elif tab_index.value == 2:
-        FiguresPanel()
+    for i, Panel in enumerate(panels):
+        is_active = tab_index.value == i
+        with solara.Column(
+            style={
+                "display": "block" if is_active else "none",
+            }
+        ):
+            Panel()
 
 
 def _find_free_port(start: int, max_attempts: int = 100) -> int:
