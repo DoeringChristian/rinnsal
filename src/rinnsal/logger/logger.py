@@ -85,6 +85,15 @@ class Logger:
 
     def _worker_loop(self) -> None:
         """Background worker that processes save operations."""
+        # Use Agg backend in worker thread to avoid tkinter
+        # "main thread is not in main loop" errors when pickling
+        # matplotlib figures.
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+        except ImportError:
+            pass
+
         while not self._stop_event.is_set() or not self._queue.empty():
             try:
                 task = self._queue.get(timeout=0.1)

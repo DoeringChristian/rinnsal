@@ -35,7 +35,7 @@ RUN_COLORS = [
 ]
 
 # Reactive state
-root_dir = solara.reactive("")
+root_dir = solara.reactive(os.environ.get("RINNSAL_LOG_DIR", ""))
 selected_runs = solara.reactive([])
 refresh_counter = solara.reactive(0)
 
@@ -916,10 +916,6 @@ def Page():
     """Main viewer page."""
     tab_index = solara.use_reactive(0)
 
-    # Initialize from environment variable if set
-    if not root_dir.value and os.environ.get("RINNSAL_LOG_DIR"):
-        root_dir.set(os.environ["RINNSAL_LOG_DIR"])
-
     solara.Title("Rinnsal Log Viewer")
 
     with solara.AppBar():
@@ -981,7 +977,7 @@ def run(log_path: str | Path | None = None, port: int = 8765):
     """
     if log_path:
         os.environ["RINNSAL_LOG_DIR"] = str(
-            Path(log_path).absolute()
+            Path(log_path).resolve()
         )
 
     port = _find_free_port(port)
