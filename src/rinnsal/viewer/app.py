@@ -16,8 +16,8 @@ import solara
 
 from rinnsal.viewer._data import (
     discover_runs,
-    load_figure_at,
-    load_figures_index,
+    get_cache,
+    invalidate_caches,
     load_scalars_timeseries,
     load_text_timeseries,
 )
@@ -763,8 +763,8 @@ def FigureItem(
 ):
     """Display figure for a single run and tag.
 
-    data is list of (iteration, file_offset, interactive).
-    Actual figure bytes loaded on demand when displayed.
+    data is list of (iteration, image_png, data_pickle, interactive).
+    All data is already in memory — no disk I/O on slider changes.
     """
     run_name = (
         str(run.relative_to(root_path)) if run != root_path else "."
@@ -790,16 +790,7 @@ def FigureItem(
             )
             solara.Text(f"Iteration: {iterations[iter_idx.value]}")
 
-        # Load figure data on demand
-        _it, offset, interactive = data[iter_idx.value]
-
-        def _load():
-            return load_figure_at(run, offset)
-
-        figure_data = solara.use_memo(
-            _load, dependencies=[offset]
-        )
-        image_png, data_pickle, _interactive = figure_data
+        _it, image_png, data_pickle, interactive = data[iter_idx.value]
 
         try:
             if interactive and data_pickle:
@@ -827,7 +818,7 @@ def FiguresPanel():
         return
 
     def load_data():
-        return {run: load_figures_index(run) for run in runs}
+        return {run: get_cache(run).figures for run in runs}
 
     runs_data = solara.use_memo(
         load_data, dependencies=[tuple(runs), refresh]
@@ -901,6 +892,7 @@ def RefreshButton():
     """Manual refresh button."""
 
     def do_refresh():
+        invalidate_caches()
         refresh_counter.set(refresh_counter.value + 1)
 
     solara.Button(
