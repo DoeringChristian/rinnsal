@@ -18,6 +18,7 @@ class DAG:
 
     def __init__(self) -> None:
         self._nodes: dict[str, TaskExpression] = {}
+        self._insertion_order: dict[str, int] = {}
         self._edges: dict[str, set[str]] = defaultdict(
             set
         )  # node -> dependencies
@@ -28,6 +29,7 @@ class DAG:
     def add_node(self, expr: TaskExpression) -> None:
         """Add a task expression to the graph."""
         if expr.hash not in self._nodes:
+            self._insertion_order[expr.hash] = len(self._nodes)
             self._nodes[expr.hash] = expr
 
     def add_edge(self, from_hash: str, to_hash: str) -> None:
@@ -62,42 +64,34 @@ class DAG:
         """Return nodes in topological order (dependencies first).
 
         Uses Kahn's algorithm for topological sorting.
+        Among nodes at the same topological level, insertion order is preserved.
         Raises ValueError if the graph contains cycles.
         """
-        # Calculate in-degrees
-        in_degree: dict[str, int] = {h: 0 for h in self._nodes}
-        for deps in self._edges.values():
-            for dep in deps:
-                if dep in in_degree:
-                    pass  # Dependencies might not be in this subgraph
-
-        for node_hash in self._nodes:
-            for dep_hash in self._edges.get(node_hash, set()):
-                if dep_hash in in_degree:
-                    # This is wrong - in_degree should count incoming edges
-                    pass
-
-        # Recalculate properly: in_degree[x] = number of nodes that depend on x
-        # Actually, for execution order, we need nodes with no dependencies first
         in_degree = {
             h: len(self._edges.get(h, set()) & set(self._nodes.keys()))
             for h in self._nodes
         }
 
-        # Start with nodes that have no dependencies
-        queue = [h for h, d in in_degree.items() if d == 0]
+        # Start with nodes that have no dependencies, in insertion order
+        queue = sorted(
+            [h for h, d in in_degree.items() if d == 0],
+            key=lambda h: self._insertion_order[h],
+        )
         result: list[TaskExpression] = []
 
         while queue:
             current = queue.pop(0)
             result.append(self._nodes[current])
 
-            # Reduce in-degree for dependents
+            # Collect newly ready dependents, then sort by insertion order
+            newly_ready = []
             for dependent in self._reverse_edges.get(current, set()):
                 if dependent in in_degree:
                     in_degree[dependent] -= 1
                     if in_degree[dependent] == 0:
-                        queue.append(dependent)
+                        newly_ready.append(dependent)
+            newly_ready.sort(key=lambda h: self._insertion_order[h])
+            queue.extend(newly_ready)
 
         if len(result) != len(self._nodes):
             raise ValueError("Graph contains a cycle")
@@ -137,12 +131,23 @@ class DAG:
         """Build a DAG from a list of task expressions.
 
         Traverses all dependencies and adds them to the graph.
+        The original list order is used as the preferred execution order
+        among tasks at the same topological level.
         """
         dag = cls()
+
+        # Record the original expression order for stable tiebreaking.
+        # Dependencies not in the original list get order based on
+        # when they are first discovered (after all explicit ones).
+        original_order: dict[str, int] = {}
+        for i, expr in enumerate(expressions):
+            if expr.hash not in original_order:
+                original_order[expr.hash] = i
 
         # Add all expressions and collect dependencies
         to_process = list(expressions)
         seen: set[str] = set()
+        next_order = len(expressions)
 
         while to_process:
             expr = to_process.pop()
@@ -159,8 +164,13 @@ class DAG:
                     dag.add_node(dep)
                     dag.add_edge(expr.hash, dep.hash)
                     if dep.hash not in seen:
+                        if dep.hash not in original_order:
+                            original_order[dep.hash] = next_order
+                            next_order += 1
                         to_process.append(dep)
 
+        # Set insertion order to match the original expression order
+        dag._insertion_order = original_order
         return dag
 
     def __repr__(self) -> str:
