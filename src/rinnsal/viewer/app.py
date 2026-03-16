@@ -793,12 +793,12 @@ def FigureItem(
         _it, image_png, data_pickle, interactive = data[iter_idx.value]
 
         try:
-            if image_png:
+            if interactive and data_pickle:
+                ClickableStaticFigure(image_png, data_pickle)
+            elif image_png:
                 StaticFigure(image_png)
             else:
                 solara.Text("No figure data.")
-            if interactive and data_pickle:
-                PopOutButton(data_pickle)
         except Exception as e:
             import traceback
 
@@ -849,15 +849,34 @@ def FiguresPanel():
 
 
 @solara.component
-def PopOutButton(data_pickle: bytes):
-    """Button that opens a native matplotlib window for interactive use."""
+def ClickableStaticFigure(image_png: bytes | None, data_pickle: bytes):
+    """Display a static PNG that opens a native matplotlib window on click."""
+    import anywidget
+    import traitlets
 
-    def open_native():
+    class ClickableImage(anywidget.AnyWidget):
+        _esm = """
+        export function render({ model, el }) {
+            const img = document.createElement('img');
+            img.src = 'data:image/png;base64,' + model.get('img_b64');
+            img.style.cssText = 'max-width:100%; cursor:pointer;';
+            img.title = 'Click to open interactive viewer';
+            img.addEventListener('click', () => {
+                model.set('clicked', model.get('clicked') + 1);
+                model.save_changes();
+            });
+            el.appendChild(img);
+        }
+        """
+        img_b64 = traitlets.Unicode("").tag(sync=True)
+        clicked = traitlets.Int(0).tag(sync=True)
+
+    def _open_native(change):
+        if change["new"] <= 0:
+            return
         import tempfile
         import textwrap
 
-        # Write pickle data to a temp file, spawn a subprocess that
-        # loads it and calls plt.show() with the native GUI backend.
         tmp = tempfile.NamedTemporaryFile(
             suffix=".pkl", delete=False
         )
@@ -883,11 +902,16 @@ def PopOutButton(data_pickle: bytes):
             start_new_session=True,
         )
 
-    solara.Button(
-        "Open interactive",
-        on_click=open_native,
-        icon_name="mdi-open-in-new",
-    )
+    if image_png:
+        import base64
+
+        img_b64 = base64.b64encode(image_png).decode("utf-8")
+    else:
+        img_b64 = ""
+
+    widget = ClickableImage(img_b64=img_b64)
+    widget.observe(_open_native, names=["clicked"])
+    solara.display(widget)
 
 
 @solara.component
