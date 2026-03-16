@@ -787,13 +787,13 @@ def FigureItem(
             solara.Text(f"Iteration: {iterations[iter_idx.value]}")
 
         # Display figure - dispatch based on interactive flag
-        fig_data = data[iter_idx.value][1]
-        interactive = data[iter_idx.value][2]
+        entry = data[iter_idx.value]
+        _it, image_png, data_pickle, interactive = entry
         try:
             if interactive:
-                InteractiveFigure(fig_data)
+                InteractiveFigure(data_pickle)
             else:
-                StaticFigure(fig_data)
+                StaticFigure(image_png)
         except Exception as e:
             import traceback
 
@@ -844,37 +844,24 @@ def FiguresPanel():
 
 
 @solara.component
-def InteractiveFigure(fig_data: Path | bytes):
-    """Display a matplotlib figure interactively."""
-    mpl_fig = load_figure(fig_data)
+def InteractiveFigure(data_pickle: bytes):
+    """Display a matplotlib figure interactively using ipympl."""
+    import cloudpickle
+
+    mpl_fig = cloudpickle.loads(data_pickle)
     if mpl_fig is None:
-        solara.Text("Loading figure...")
+        solara.Text("Failed to load figure.")
         return
 
     solara.FigureMatplotlib(mpl_fig)
 
 
 @solara.component
-def StaticFigure(fig_data: Path | bytes):
-    """Display a matplotlib figure as a static image."""
+def StaticFigure(image_png: bytes):
+    """Display a pre-rendered PNG image."""
     import base64
-    import io
 
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    mpl_fig = load_figure(fig_data)
-    if mpl_fig is None:
-        solara.Text("Failed to load figure.")
-        return
-
-    buf = io.BytesIO()
-    mpl_fig.savefig(buf, format="png", dpi=100, bbox_inches="tight")
-    buf.seek(0)
-    img_data = base64.b64encode(buf.read()).decode("utf-8")
-    plt.close(mpl_fig)
+    img_data = base64.b64encode(image_png).decode("utf-8")
 
     solara.HTML(
         tag="img",

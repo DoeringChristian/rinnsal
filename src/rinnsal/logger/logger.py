@@ -238,6 +238,15 @@ class Logger:
         event.text.CopyFrom(Text(tag=tag, value=text))
         self._event_writer.write(event)
 
+    def _render_to_png(self, figure: Any) -> bytes:
+        """Render a matplotlib figure to PNG bytes."""
+        import io
+
+        buf = io.BytesIO()
+        figure.savefig(buf, format="png", dpi=100, bbox_inches="tight")
+        buf.seek(0)
+        return buf.read()
+
     def _write_figure(
         self,
         tag: str,
@@ -248,13 +257,23 @@ class Logger:
     ) -> None:
         from rinnsal.logger.events_pb2 import Event, Figure
 
-        data = cloudpickle.dumps(figure)
         event = Event()
         event.timestamp = ts
         event.iteration = it
-        event.figure.CopyFrom(
-            Figure(tag=tag, data=data, interactive=interactive)
-        )
+
+        if interactive:
+            # Store pickled figure for full interactivity
+            data = cloudpickle.dumps(figure)
+            event.figure.CopyFrom(
+                Figure(tag=tag, interactive=True, data=data)
+            )
+        else:
+            # Store PNG for instant display
+            image = self._render_to_png(figure)
+            event.figure.CopyFrom(
+                Figure(tag=tag, interactive=False, image=image)
+            )
+
         self._event_writer.write(event)
 
     def _write_checkpoint(

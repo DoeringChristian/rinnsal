@@ -89,8 +89,8 @@ class LogReader:
         )
         self._text_cache: dict[str, list[tuple[int, str]]] | None = None
         self._figures_cache: (
-            dict[str, list[tuple[int, bytes]]] | None
-        ) = None
+            dict[str, list[tuple[int, bytes, bytes, bool]]] | None
+        ) = None  # (it, image_png, data_pickle, interactive)
         self._checkpoints_cache: (
             dict[str, list[tuple[int, bytes]]] | None
         ) = None
@@ -139,7 +139,12 @@ class LogReader:
                 if tag not in self._figures_cache:
                     self._figures_cache[tag] = []
                 self._figures_cache[tag].append(
-                    (it, event.figure.data)
+                    (
+                        it,
+                        event.figure.image,
+                        event.figure.data,
+                        event.figure.interactive,
+                    )
                 )
 
             elif data_type == "checkpoint":
@@ -273,15 +278,19 @@ class LogReader:
         return (self._text_cache or {}).get(tag, [])
 
     def load_figure(self, tag: str, iteration: int) -> Any:
+        """Load a figure. Returns the matplotlib figure object for
+        interactive figures, or PNG bytes for non-interactive ones."""
         if not self.is_run:
             raise ValueError(
                 "Not a run directory. Use get_run() first."
             )
         self._load_events()
         if self._figures_cache and tag in self._figures_cache:
-            for it, data in self._figures_cache[tag]:
+            for it, image, data, interactive in self._figures_cache[tag]:
                 if it == iteration:
-                    return cloudpickle.loads(data)
+                    if interactive:
+                        return cloudpickle.loads(data)
+                    return image  # PNG bytes
         raise FileNotFoundError(
             f"Figure not found: {tag} at iteration {iteration}"
         )
@@ -293,7 +302,9 @@ class LogReader:
             )
         self._load_events()
         if self._figures_cache and tag in self._figures_cache:
-            return [it for it, _ in self._figures_cache[tag]]
+            return [
+                it for it, _, _, _ in self._figures_cache[tag]
+            ]
         return []
 
     def figures(

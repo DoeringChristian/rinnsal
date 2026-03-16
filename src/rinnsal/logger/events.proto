@@ -7,15 +7,10 @@ syntax = "proto3";
 
 package rinnsal;
 
-// A single logged event
 message Event {
-  // Timestamp in seconds since epoch
   double timestamp = 1;
-
-  // Iteration number
   int64 iteration = 2;
 
-  // The actual data (one of the following)
   oneof data {
     Scalar scalar = 3;
     Text text = 4;
@@ -24,27 +19,24 @@ message Event {
   }
 }
 
-// A scalar value (e.g., loss, accuracy)
 message Scalar {
   string tag = 1;
   double value = 2;
 }
 
-// A text string (e.g., logs, summaries)
 message Text {
   string tag = 1;
   string value = 2;
 }
 
-// A figure (matplotlib figure serialized with cloudpickle)
 message Figure {
   string tag = 1;
-  bytes data = 2;  // cloudpickle serialized figure
-  bool interactive = 3;
+  bool interactive = 2;
+  bytes image = 3;   // PNG bytes (non-interactive)
+  bytes data = 4;    // cloudpickle bytes (interactive)
 }
 
-// A checkpoint (arbitrary object serialized with cloudpickle)
 message Checkpoint {
   string tag = 1;
-  bytes data = 2;  // cloudpickle serialized object
+  bytes data = 2;
 }
