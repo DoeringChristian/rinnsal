@@ -193,53 +193,90 @@ class FlowDef:
     def __call__(self, **kwargs: Any) -> FlowResult:
         """Execute the flow and return a FlowResult.
 
-        The flow function is called to build the DAG, then all tasks
-        are evaluated in topological order.
+        Parses CLI arguments (--filter, -s, --executor, etc.) from
+        sys.argv, sets up the engine, then executes the flow.
         """
-        with flow_scope() as ctx:
-            # Call the flow function to build the DAG
-            self._func(**kwargs)
+        from rinnsal.cli.flags import (
+            add_builtin_flags,
+            extract_builtin_flags,
+            remove_builtin_flags,
+        )
+        from rinnsal.cli.parser import create_parser_from_signature
+        from rinnsal.persistence.file_store import FileDatabase
+        from rinnsal.runtime.engine import ExecutionEngine, set_engine
 
-            # Get all tasks registered during flow execution
+        # Parse CLI arguments
+        parser = create_parser_from_signature(
+            self._func, description=self._func.__doc__
+        )
+        add_builtin_flags(parser)
+        namespace, _ = parser.parse_known_args()
+
+        builtin_flags = extract_builtin_flags(namespace)
+        cli_kwargs = remove_builtin_flags(vars(namespace))
+        # Programmatic kwargs override CLI defaults
+        merged_kwargs = {**cli_kwargs, **kwargs}
+
+        # Setup engine
+        executor = _create_executor(
+            builtin_flags["executor"],
+            capture=not builtin_flags["no_capture"],
+        )
+        database = FileDatabase(root=builtin_flags["db_path"])
+        engine = ExecutionEngine(
+            executor=executor,
+            database=database,
+            use_cache=not builtin_flags["no_cache"],
+        )
+        set_engine(engine)
+
+        try:
+            if builtin_flags["filter"]:
+                return self._run_filtered(
+                    builtin_flags["filter"], merged_kwargs
+                )
+            return self._execute(merged_kwargs)
+        finally:
+            engine.shutdown()
+
+    def _execute(self, kwargs: dict[str, Any]) -> FlowResult:
+        """Execute the flow with the given kwargs."""
+        with flow_scope() as ctx:
+            self._func(**kwargs)
             tasks = ctx.get_tasks()
 
             if not tasks:
                 return FlowResult([], self.name)
 
-            # Build DAG and evaluate
             dag = DAG.from_expressions(tasks)
             ordered = dag.topological_sort()
 
-            # Setup progress tracking
             if _show_progress:
                 progress = ProgressBar(total=len(ordered))
             else:
                 progress = SilentProgress(total=len(ordered))
 
-            # Evaluate all tasks with progress
-            # Track failed tasks to skip dependents
             engine = get_engine()
             failed_hashes: set[str] = set()
             errors: list[tuple[str, Exception]] = []
 
             for expr in ordered:
-                # Check if any dependency has failed
                 deps = dag.get_dependencies(expr.hash)
                 if deps & failed_hashes:
-                    # Skip this task - a dependency failed
                     failed_hashes.add(expr.hash)
                     progress.skip(expr.task_name)
                     continue
 
                 if expr.is_evaluated:
-                    # Already evaluated (cached in memory)
                     progress.complete(expr.task_name, cached=True)
                 else:
                     progress.start(expr.task_name)
                     was_cached = self._check_cached(engine, expr)
                     try:
                         engine.evaluate(expr)
-                        progress.complete(expr.task_name, cached=was_cached)
+                        progress.complete(
+                            expr.task_name, cached=was_cached
+                        )
                     except Exception as e:
                         failed_hashes.add(expr.hash)
                         errors.append((expr.task_name, e))
@@ -247,7 +284,6 @@ class FlowDef:
 
             progress.finish()
 
-            # Report errors at the end
             if errors:
                 if len(errors) == 1:
                     raise errors[0][1]
@@ -256,11 +292,99 @@ class FlowDef:
                     msg += f"  - {name}: {err}\n"
                 raise RuntimeError(msg)
 
-            # Create and store result
             result = FlowResult(tasks, self.name)
             self._runs.append(result)
-
             return result
+
+    def _run_filtered(
+        self, pattern: str, kwargs: dict[str, Any]
+    ) -> FlowResult:
+        """Execute only tasks matching the pattern.
+
+        Dependencies of matched tasks are loaded from cache.
+        """
+        import re as re_mod
+
+        engine = get_engine()
+        database = engine.database
+
+        if database is None:
+            raise ValueError(
+                "Filter mode requires a database for cached results"
+            )
+
+        with flow_scope() as ctx:
+            self._func(**kwargs)
+            tasks = ctx.get_tasks()
+
+        if not tasks:
+            raise ValueError("Flow produced no tasks")
+
+        dag = DAG.from_expressions(tasks)
+        ordered = dag.topological_sort()
+
+        regex = re_mod.compile(pattern)
+        matched_hashes = {
+            t.hash
+            for t in tasks
+            if regex.search(t.task_name)
+            or regex.search(t.func.__name__)
+        }
+
+        if not matched_hashes:
+            available = [t.task_name for t in tasks]
+            raise ValueError(
+                f"No tasks match pattern '{pattern}'. "
+                f"Available tasks: {available}"
+            )
+
+        # Collect all dependencies of matched tasks
+        required_dep_hashes: set[str] = set()
+
+        def collect_deps(task_hash: str) -> None:
+            for dep_hash in dag.get_dependencies(task_hash):
+                if dep_hash not in required_dep_hashes:
+                    required_dep_hashes.add(dep_hash)
+                    collect_deps(dep_hash)
+
+        for h in matched_hashes:
+            collect_deps(h)
+
+        tasks_to_process = [
+            e
+            for e in ordered
+            if e.hash in matched_hashes
+            or e.hash in required_dep_hashes
+        ]
+        if _show_progress:
+            progress = ProgressBar(total=len(tasks_to_process))
+        else:
+            progress = SilentProgress(total=len(tasks_to_process))
+
+        for expr in ordered:
+            if expr.hash in matched_hashes:
+                progress.start(expr.task_name)
+                engine.evaluate(expr)
+                progress.complete(expr.task_name, cached=False)
+            elif expr.hash in required_dep_hashes:
+                progress.start(expr.task_name)
+                cached = database.fetch_task_result(expr.hash)
+                if cached is None:
+                    progress.fail(expr.task_name)
+                    raise ValueError(
+                        f"No cached result for dependency "
+                        f"'{expr.task_name}'. Run the full flow "
+                        "first to populate the cache."
+                    )
+                expr.set_result(cached.result)
+                progress.complete(expr.task_name, cached=True)
+
+        progress.finish()
+
+        matched_tasks = [
+            t for t in tasks if t.hash in matched_hashes
+        ]
+        return FlowResult(matched_tasks, self.name)
 
     def _check_cached(self, engine: Any, expr: TaskExpression) -> bool:
         """Check if expression result is in database cache."""
@@ -293,6 +417,36 @@ class FlowDef:
 
     def __repr__(self) -> str:
         return f"FlowDef({self.name})"
+
+
+def _create_executor(name: str, capture: bool = True) -> Any:
+    """Create an executor by name."""
+    from rinnsal.execution.inline import InlineExecutor
+
+    if name == "inline":
+        return InlineExecutor(capture=capture)
+    elif name == "subprocess":
+        try:
+            from rinnsal.execution.subprocess import SubprocessExecutor
+
+            return SubprocessExecutor(capture=capture)
+        except ImportError:
+            raise ValueError("Subprocess executor not available")
+    elif name == "ssh":
+        raise ValueError(
+            "SSH executor requires additional configuration"
+        )
+    elif name == "ray":
+        try:
+            from rinnsal.execution.ray_executor import RayExecutor
+
+            return RayExecutor(capture=capture)
+        except ImportError:
+            raise ValueError(
+                "Ray executor requires ray to be installed"
+            )
+    else:
+        raise ValueError(f"Unknown executor: {name}")
 
 
 def flow(func: Callable[P, R]) -> FlowDef:
