@@ -43,6 +43,9 @@ class TaskDef:
 
         The task is not executed immediately - instead, a TaskExpression
         is returned that can be evaluated later.
+
+        If ``name=`` is passed, it is also used to set the expression's
+        human-readable name.
         """
         # Compute the hash for deduplication
         hash_key = compute_task_hash(self._func, args, kwargs)
@@ -55,6 +58,9 @@ class TaskDef:
             return expr
 
         expr = registry.get_or_create(hash_key, create_expression)
+
+        if "name" in kwargs:
+            expr.name(str(kwargs["name"]))
 
         # Register in the current flow context if one exists
         register_task_in_context(expr)
