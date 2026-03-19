@@ -125,12 +125,7 @@ class FlowResult:
 
         filter_pattern = self._builtin_flags.get("filter")
 
-        # Collect all tasks: returned + transitive deps
-        all_tasks: set[TaskExpression] = set(self._tasks)
-        for t in self._tasks:
-            all_tasks.update(t.get_all_dependencies())
-
-        dag = DAG.from_expressions(list(all_tasks))
+        dag = DAG.from_expressions(self._tasks)
         ordered = dag.topological_sort()
 
         engine = self._get_or_create_engine()
@@ -249,11 +244,7 @@ class FlowResult:
         if not self._tasks:
             return self._return_value
 
-        all_tasks: set[TaskExpression] = set(self._tasks)
-        for t in self._tasks:
-            all_tasks.update(t.get_all_dependencies())
-
-        dag = DAG.from_expressions(list(all_tasks))
+        dag = DAG.from_expressions(self._tasks)
         ordered = dag.topological_sort()
 
         engine = self._get_or_create_engine()

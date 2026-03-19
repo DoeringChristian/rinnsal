@@ -152,6 +152,82 @@ class TestTaskRetry:
             rinnsal_eval(always_fails())
 
 
+class TestStableExecutionOrder:
+    """Test that tasks execute in the order they were defined in the flow."""
+
+    def test_independent_tasks_run_in_definition_order(self, engine):
+        """Independent tasks (no deps between them) run in flow-body order."""
+        call_log = []
+
+        @task
+        def job(label):
+            call_log.append(label)
+            return label
+
+        @flow
+        def my_flow():
+            a = job("first")
+            b = job("second")
+            c = job("third")
+            return [a, b, c]
+
+        my_flow().run()
+        assert call_log == ["first", "second", "third"]
+
+    def test_later_task_does_not_run_before_earlier(self, engine):
+        """Regression: set conversion must not reorder tasks."""
+        call_log = []
+
+        @task
+        def step(label):
+            call_log.append(label)
+            return label
+
+        @flow
+        def my_flow():
+            tasks = [step(f"t{i}") for i in range(10)]
+            return tasks
+
+        my_flow().run()
+        assert call_log == [f"t{i}" for i in range(10)]
+
+    def test_deps_before_dependents_with_stable_peers(self, engine):
+        """Dependencies run first; among peers, definition order is kept."""
+        call_log = []
+
+        @task
+        def source():
+            call_log.append("source")
+            return 1
+
+        @task
+        def alpha(x):
+            call_log.append("alpha")
+            return x
+
+        @task
+        def beta(x):
+            call_log.append("beta")
+            return x
+
+        @task
+        def gamma(x):
+            call_log.append("gamma")
+            return x
+
+        @flow
+        def my_flow():
+            s = source()
+            a = alpha(s)
+            b = beta(s)
+            g = gamma(s)
+            return [a, b, g]
+
+        my_flow().run()
+        assert call_log[0] == "source"
+        assert call_log[1:] == ["alpha", "beta", "gamma"]
+
+
 class TestFlowExecution:
     """Tests for flow execution."""
 
