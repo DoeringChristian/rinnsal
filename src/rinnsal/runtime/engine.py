@@ -261,7 +261,14 @@ def _create_default_engine() -> ExecutionEngine:
 
     executor = SubprocessExecutor(capture=not no_capture)
 
-    return ExecutionEngine(executor=executor, use_cache=not no_cache)
+    # Use the default file database for persistence
+    from rinnsal.persistence.file_store import get_database
+
+    database = get_database()
+
+    return ExecutionEngine(
+        executor=executor, database=database, use_cache=not no_cache
+    )
 
 
 def set_engine(engine: ExecutionEngine) -> None:
