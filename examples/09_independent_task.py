@@ -22,15 +22,17 @@ def add(a, b):
     return a + b
 
 
-@flow
-def pipeline():
-    data = source()
-    doubled = double(data)
-    return add(data, doubled)
-
-
 if __name__ == "__main__":
-    result = pipeline().results()
-    print(f"{result.result=}")
-    result = pipeline().run()
-    print(f"Result: {result.result}")
+    # Tasks can also be run outside of a flow
+    x_ = double(10)
+
+    x = source()
+    y = double(x)
+    z = add(x, y)
+
+    print(f"{z.runs[-1]=}")
+
+    print(f"{z.is_evaluated=}")
+    z.eval()
+    print(f"{z.is_evaluated=}")
+    print(f"{x_.is_evaluated=}")

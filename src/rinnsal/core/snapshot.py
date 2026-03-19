@@ -144,10 +144,12 @@ class SnapshotManager:
         py_files = sorted(root.rglob("*.py"))
 
         for py_file in py_files:
-            # Skip __pycache__ and other artifacts
-            if "__pycache__" in str(py_file):
-                continue
-            if ".venv" in str(py_file) or "venv" in str(py_file):
+            # Skip __pycache__, venvs, and .rinnsal artifacts
+            parts = py_file.relative_to(root).parts
+            if any(
+                p in ("__pycache__", ".venv", "venv", ".rinnsal")
+                for p in parts
+            ):
                 continue
 
             rel_path = py_file.relative_to(root)
@@ -159,10 +161,12 @@ class SnapshotManager:
     def _copy_python_files(self, src: Path, dst: Path) -> None:
         """Copy Python files from src to dst, preserving structure."""
         for py_file in src.rglob("*.py"):
-            # Skip __pycache__ and venv
-            if "__pycache__" in str(py_file):
-                continue
-            if ".venv" in str(py_file) or "venv" in str(py_file):
+            # Skip __pycache__, venvs, and .rinnsal artifacts
+            parts = py_file.relative_to(src).parts
+            if any(
+                p in ("__pycache__", ".venv", "venv", ".rinnsal")
+                for p in parts
+            ):
                 continue
 
             rel_path = py_file.relative_to(src)

@@ -9,7 +9,6 @@ from typing import Any, Callable, ParamSpec, TypeVar, overload
 
 from rinnsal.core.expression import TaskExpression
 from rinnsal.core.graph import DAG
-from rinnsal.core.registry import flow_scope, get_flow_context
 from rinnsal.core.types import Entry, Runs
 from rinnsal.runtime.engine import get_engine
 from rinnsal.progress.bar import ProgressBar, SilentProgress
@@ -33,22 +32,40 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
-class FlowResult:
-    """Result of a flow execution.
+def _extract_tasks(value: Any) -> list[TaskExpression]:
+    """Recursively extract all TaskExpression objects from a structure."""
+    if isinstance(value, TaskExpression):
+        return [value]
+    if isinstance(value, dict):
+        tasks: list[TaskExpression] = []
+        for v in value.values():
+            tasks.extend(_extract_tasks(v))
+        return tasks
+    if isinstance(value, (list, tuple)):
+        tasks = []
+        for v in value:
+            tasks.extend(_extract_tasks(v))
+        return tasks
+    return []
 
-    An indexable collection of all evaluated tasks with support for:
-    - Integer indexing (positional)
-    - String indexing (regex match on task name)
-    - Callable indexing (filter by task arguments)
+
+class FlowResult:
+    """Result of calling a flow function (unevaluated).
+
+    Wraps the return value of a flow function. Provides run() to
+    execute and results() to load from cache.
     """
 
     def __init__(
         self,
-        tasks: list[TaskExpression],
+        return_value: Any,
         flow_name: str,
+        builtin_flags: dict[str, Any],
     ) -> None:
-        self._tasks = tasks
+        self._return_value = return_value
         self._flow_name = flow_name
+        self._builtin_flags = builtin_flags
+        self._tasks = _extract_tasks(return_value)
 
     @property
     def tasks(self) -> list[TaskExpression]:
@@ -57,6 +74,137 @@ class FlowResult:
     @property
     def flow_name(self) -> str:
         return self._flow_name
+
+    def run(self) -> Any:
+        """Execute the returned tasks (+ dependencies) and return the original structure."""
+        if not self._tasks:
+            return self._return_value
+
+        # Collect all tasks: returned + transitive deps
+        all_tasks: set[TaskExpression] = set(self._tasks)
+        for t in self._tasks:
+            all_tasks.update(t.get_all_dependencies())
+
+        dag = DAG.from_expressions(list(all_tasks))
+        ordered = dag.topological_sort()
+
+        engine = self._get_or_create_engine()
+
+        if _show_progress:
+            progress = ProgressBar(total=len(ordered))
+        else:
+            progress = SilentProgress(total=len(ordered))
+
+        try:
+            failed_hashes: set[str] = set()
+            errors: list[tuple[str, Exception]] = []
+
+            for expr in ordered:
+                deps = dag.get_dependencies(expr.hash)
+                if deps & failed_hashes:
+                    failed_hashes.add(expr.hash)
+                    progress.skip(expr.task_name)
+                    continue
+
+                if expr.is_evaluated:
+                    progress.complete(expr.task_name, cached=True)
+                else:
+                    progress.start(expr.task_name)
+                    was_cached = self._check_cached(engine, expr)
+                    try:
+                        engine.evaluate(expr)
+                        progress.complete(
+                            expr.task_name, cached=was_cached
+                        )
+                    except Exception as e:
+                        failed_hashes.add(expr.hash)
+                        errors.append((expr.task_name, e))
+                        progress.fail(expr.task_name)
+
+            progress.finish()
+
+            if errors:
+                if len(errors) == 1:
+                    raise errors[0][1]
+                msg = f"{len(errors)} tasks failed:\n"
+                for name, err in errors:
+                    msg += f"  - {name}: {err}\n"
+                raise RuntimeError(msg)
+
+            return self._return_value
+        finally:
+            if not self._builtin_flags.get("_engine_preset"):
+                engine.shutdown()
+
+    def results(self) -> Any:
+        """Load cached results for all returned tasks and return the original structure."""
+        if not self._tasks:
+            return self._return_value
+
+        all_tasks: set[TaskExpression] = set(self._tasks)
+        for t in self._tasks:
+            all_tasks.update(t.get_all_dependencies())
+
+        dag = DAG.from_expressions(list(all_tasks))
+        ordered = dag.topological_sort()
+
+        engine = self._get_or_create_engine()
+        database = engine.database
+        if database is None:
+            raise ValueError("results() requires a database for cached results")
+
+        try:
+            for expr in ordered:
+                if expr.is_evaluated:
+                    continue
+                cached = database.fetch_task_result(expr.hash, expr.task_name)
+                if cached is None:
+                    raise ValueError(
+                        f"No cached result for task '{expr.task_name}'. "
+                        "Run the flow first to populate the cache."
+                    )
+                expr.set_result(cached.result)
+
+            return self._return_value
+        finally:
+            if not self._builtin_flags.get("_engine_preset"):
+                engine.shutdown()
+
+    def _get_or_create_engine(self) -> Any:
+        """Get existing engine or create one from builtin flags."""
+        from rinnsal.runtime.engine import ExecutionEngine, set_engine, _default_engine
+
+        if _default_engine is not None:
+            self._builtin_flags["_engine_preset"] = True
+            return _default_engine
+
+        executor = _create_executor(
+            self._builtin_flags["executor"],
+            capture=not self._builtin_flags["no_capture"],
+        )
+        from rinnsal.persistence.file_store import FileDatabase
+
+        database = FileDatabase(root=self._builtin_flags["db_path"])
+        engine = ExecutionEngine(
+            executor=executor,
+            database=database,
+            use_cache=not self._builtin_flags["no_cache"],
+        )
+        set_engine(engine)
+
+        from rinnsal.core.snapshot import SnapshotManager, set_snapshot_manager
+
+        set_snapshot_manager(
+            SnapshotManager(snapshot_dir=database._snapshots_dir)
+        )
+
+        return engine
+
+    def _check_cached(self, engine: Any, expr: TaskExpression) -> bool:
+        if engine.database is not None and engine.use_cache:
+            cached = engine.database.fetch_task_result(expr.hash, expr.task_name)
+            return cached is not None
+        return False
 
     def __len__(self) -> int:
         return len(self._tasks)
@@ -98,7 +246,7 @@ class FlowResult:
 
         if len(matches) == 1:
             return matches[0]
-        return FlowResult(matches, self._flow_name)
+        return FlowResult._from_tasks(matches, self._flow_name)
 
     def _filter_by_callable(
         self, filter_fn: Callable[..., bool]
@@ -110,15 +258,12 @@ class FlowResult:
         matches: list[TaskExpression] = []
 
         for task in self._tasks:
-            # Get the task's resolved argument values
             try:
                 task_sig = inspect.signature(task.func)
                 task_params = list(task_sig.parameters.keys())
 
-                # Build a dict of parameter names to resolved values
                 arg_dict: dict[str, Any] = {}
 
-                # Map positional args
                 for i, (param, value) in enumerate(zip(task_params, task.args)):
                     if param in param_names:
                         if task.is_evaluated:
@@ -126,7 +271,6 @@ class FlowResult:
 
                             arg_dict[param] = unwrap_value(value)
                         else:
-                            # For unevaluated tasks, try to get the value
                             from rinnsal.core.expression import ValueExpression
 
                             if isinstance(value, ValueExpression):
@@ -134,7 +278,6 @@ class FlowResult:
                             elif not isinstance(value, TaskExpression):
                                 arg_dict[param] = value
 
-                # Add keyword args
                 for key, value in task.kwargs.items():
                     if key in param_names:
                         if task.is_evaluated:
@@ -149,19 +292,27 @@ class FlowResult:
                             elif not isinstance(value, TaskExpression):
                                 arg_dict[key] = value
 
-                # Only match if we have all required parameters
                 if param_names <= set(arg_dict.keys()):
                     filter_args = {k: arg_dict[k] for k in param_names}
                     if filter_fn(**filter_args):
                         matches.append(task)
 
             except (ValueError, TypeError):
-                # Skip tasks that don't match the filter signature
                 continue
 
         if len(matches) == 1:
             return matches[0]
-        return FlowResult(matches, self._flow_name)
+        return FlowResult._from_tasks(matches, self._flow_name)
+
+    @classmethod
+    def _from_tasks(cls, tasks: list[TaskExpression], flow_name: str) -> FlowResult:
+        """Create a FlowResult wrapping a plain task list (for filtering)."""
+        result = cls.__new__(cls)
+        result._return_value = tasks
+        result._flow_name = flow_name
+        result._builtin_flags = {}
+        result._tasks = tasks
+        return result
 
     def __repr__(self) -> str:
         return f"FlowResult({self._flow_name}, tasks={len(self._tasks)})"
@@ -170,8 +321,8 @@ class FlowResult:
 class FlowDef:
     """A flow definition wrapping a function.
 
-    Created by the @flow decorator. When called, executes the flow
-    function to build a DAG, then evaluates all tasks.
+    Created by the @flow decorator. When called, captures the return
+    value and returns a FlowResult for lazy execution.
     """
 
     def __init__(
@@ -179,7 +330,6 @@ class FlowDef:
         func: Callable[..., Any],
     ) -> None:
         self._func = func
-        self._runs: Runs[FlowResult] = Runs()
         functools.update_wrapper(self, func)
 
     @property
@@ -191,10 +341,10 @@ class FlowDef:
         return self._func.__name__
 
     def __call__(self, **kwargs: Any) -> FlowResult:
-        """Execute the flow and return a FlowResult.
+        """Call the flow function and return a FlowResult (unevaluated).
 
-        Parses CLI arguments (--filter, -s, --executor, etc.) from
-        sys.argv, sets up the engine, then executes the flow.
+        Parses CLI arguments from sys.argv, merges with programmatic
+        kwargs, calls the flow function, and wraps the return value.
         """
         from rinnsal.cli.flags import (
             add_builtin_flags,
@@ -202,8 +352,6 @@ class FlowDef:
             remove_builtin_flags,
         )
         from rinnsal.cli.parser import create_parser_from_signature
-        from rinnsal.persistence.file_store import FileDatabase
-        from rinnsal.runtime.engine import ExecutionEngine, set_engine
 
         # Parse CLI arguments
         parser = create_parser_from_signature(
@@ -217,203 +365,10 @@ class FlowDef:
         # Programmatic kwargs override CLI defaults
         merged_kwargs = {**cli_kwargs, **kwargs}
 
-        # Setup engine
-        executor = _create_executor(
-            builtin_flags["executor"],
-            capture=not builtin_flags["no_capture"],
-        )
-        database = FileDatabase(root=builtin_flags["db_path"])
-        engine = ExecutionEngine(
-            executor=executor,
-            database=database,
-            use_cache=not builtin_flags["no_cache"],
-        )
-        set_engine(engine)
+        # Call flow function to build expression graph
+        return_value = self._func(**merged_kwargs)
 
-        try:
-            if builtin_flags["filter"]:
-                return self._run_filtered(
-                    builtin_flags["filter"], merged_kwargs
-                )
-            return self._execute(merged_kwargs)
-        finally:
-            engine.shutdown()
-
-    def _execute(self, kwargs: dict[str, Any]) -> FlowResult:
-        """Execute the flow with the given kwargs."""
-        with flow_scope() as ctx:
-            self._func(**kwargs)
-            tasks = ctx.get_tasks()
-
-            if not tasks:
-                return FlowResult([], self.name)
-
-            dag = DAG.from_expressions(tasks)
-            ordered = dag.topological_sort()
-
-            if _show_progress:
-                progress = ProgressBar(total=len(ordered))
-            else:
-                progress = SilentProgress(total=len(ordered))
-
-            engine = get_engine()
-            failed_hashes: set[str] = set()
-            errors: list[tuple[str, Exception]] = []
-
-            for expr in ordered:
-                deps = dag.get_dependencies(expr.hash)
-                if deps & failed_hashes:
-                    failed_hashes.add(expr.hash)
-                    progress.skip(expr.task_name)
-                    continue
-
-                if expr.is_evaluated:
-                    progress.complete(expr.task_name, cached=True)
-                else:
-                    progress.start(expr.task_name)
-                    was_cached = self._check_cached(engine, expr)
-                    try:
-                        engine.evaluate(expr)
-                        progress.complete(
-                            expr.task_name, cached=was_cached
-                        )
-                    except Exception as e:
-                        failed_hashes.add(expr.hash)
-                        errors.append((expr.task_name, e))
-                        progress.fail(expr.task_name)
-
-            progress.finish()
-
-            if errors:
-                if len(errors) == 1:
-                    raise errors[0][1]
-                msg = f"{len(errors)} tasks failed:\n"
-                for name, err in errors:
-                    msg += f"  - {name}: {err}\n"
-                raise RuntimeError(msg)
-
-            result = FlowResult(tasks, self.name)
-            self._runs.append(result)
-            return result
-
-    def _run_filtered(
-        self, pattern: str, kwargs: dict[str, Any]
-    ) -> FlowResult:
-        """Execute only tasks matching the pattern.
-
-        Dependencies of matched tasks are loaded from cache.
-        """
-        import re as re_mod
-
-        engine = get_engine()
-        database = engine.database
-
-        if database is None:
-            raise ValueError(
-                "Filter mode requires a database for cached results"
-            )
-
-        with flow_scope() as ctx:
-            self._func(**kwargs)
-            tasks = ctx.get_tasks()
-
-        if not tasks:
-            raise ValueError("Flow produced no tasks")
-
-        dag = DAG.from_expressions(tasks)
-        ordered = dag.topological_sort()
-
-        regex = re_mod.compile(pattern)
-        matched_hashes = {
-            t.hash
-            for t in tasks
-            if regex.search(t.task_name)
-            or regex.search(t.func.__name__)
-        }
-
-        if not matched_hashes:
-            available = [t.task_name for t in tasks]
-            raise ValueError(
-                f"No tasks match pattern '{pattern}'. "
-                f"Available tasks: {available}"
-            )
-
-        # Collect all dependencies of matched tasks
-        required_dep_hashes: set[str] = set()
-
-        def collect_deps(task_hash: str) -> None:
-            for dep_hash in dag.get_dependencies(task_hash):
-                if dep_hash not in required_dep_hashes:
-                    required_dep_hashes.add(dep_hash)
-                    collect_deps(dep_hash)
-
-        for h in matched_hashes:
-            collect_deps(h)
-
-        tasks_to_process = [
-            e
-            for e in ordered
-            if e.hash in matched_hashes
-            or e.hash in required_dep_hashes
-        ]
-        if _show_progress:
-            progress = ProgressBar(total=len(tasks_to_process))
-        else:
-            progress = SilentProgress(total=len(tasks_to_process))
-
-        for expr in ordered:
-            if expr.hash in matched_hashes:
-                progress.start(expr.task_name)
-                engine.evaluate(expr)
-                progress.complete(expr.task_name, cached=False)
-            elif expr.hash in required_dep_hashes:
-                progress.start(expr.task_name)
-                cached = database.fetch_task_result(expr.hash)
-                if cached is None:
-                    progress.fail(expr.task_name)
-                    raise ValueError(
-                        f"No cached result for dependency "
-                        f"'{expr.task_name}'. Run the full flow "
-                        "first to populate the cache."
-                    )
-                expr.set_result(cached.result)
-                progress.complete(expr.task_name, cached=True)
-
-        progress.finish()
-
-        matched_tasks = [
-            t for t in tasks if t.hash in matched_hashes
-        ]
-        return FlowResult(matched_tasks, self.name)
-
-    def _check_cached(self, engine: Any, expr: TaskExpression) -> bool:
-        """Check if expression result is in database cache."""
-        if engine.database is not None and engine.use_cache:
-            cached = engine.database.fetch_task_result(expr.hash)
-            return cached is not None
-        return False
-
-    def results(self, **kwargs: Any) -> FlowResult:
-        """Re-run the flow function to rebuild DAG, load cached results.
-
-        This rebuilds the DAG structure without re-executing tasks,
-        loading results from the cache/database instead.
-        """
-        # For now, this just runs the flow normally
-        # TODO: Implement cache loading
-        return self(**kwargs)
-
-    @overload
-    def __getitem__(self, index: int) -> FlowResult: ...
-
-    @overload
-    def __getitem__(self, pattern: str) -> FlowResult: ...
-
-    def __getitem__(self, key: int | str) -> FlowResult:
-        """Access historical flow results."""
-        if isinstance(key, int):
-            return self._runs[key]
-        raise TypeError(f"Invalid key type: {type(key)}")
+        return FlowResult(return_value, self.name, builtin_flags)
 
     def __repr__(self) -> str:
         return f"FlowDef({self.name})"
@@ -453,24 +408,26 @@ def flow(func: Callable[P, R]) -> FlowDef:
     """Decorator to create a flow.
 
     A flow wraps a function that builds a task DAG. The flow function
-    calls tasks, and the system collects all registered tasks to form
-    the DAG.
+    calls tasks and returns the expressions to execute. Use .run()
+    on the result to execute, or .results() to load from cache.
 
     Args:
         func: The function that builds the task DAG
 
     Returns:
-        A FlowDef that executes the DAG when called
+        A FlowDef that returns a FlowResult when called
 
     Examples:
         @flow
         def my_flow(learning_rate=0.01, epochs=10):
             data = load_data()
             model = train(data, lr=learning_rate, epochs=epochs)
-            evaluate(model)
+            return evaluate(model)
 
-        # Run the flow
+        # Lazy — just builds expressions:
         result = my_flow()
-        result = my_flow(learning_rate=0.001)  # Override defaults
+
+        # Execute:
+        outputs = result.run()
     """
     return FlowDef(func)

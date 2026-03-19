@@ -52,18 +52,47 @@ class FileDatabase(BaseDatabase):
         self._flows_dir.mkdir(parents=True, exist_ok=True)
         self._snapshots_dir.mkdir(parents=True, exist_ok=True)
 
+        # Cache: task_hash -> resolved directory Path
+        self._task_dir_cache: dict[str, Path] = {}
+
     @property
     def root(self) -> Path:
         return self._root
 
-    def _task_dir(self, task_hash: str) -> Path:
-        return self._tasks_dir / task_hash
+    def _task_dir(self, task_hash: str, task_name: str | None = None) -> Path:
+        """Resolve the on-disk directory for a task.
 
-    def _task_results_dir(self, task_hash: str) -> Path:
-        return self._task_dir(task_hash) / "results"
+        When *task_name* is given (store path), the directory is
+        ``<name>-<hash>``; otherwise it falls back to ``<hash>``.
+        For lookups the method searches for an existing directory
+        ending with the hash.
+        """
+        cached = self._task_dir_cache.get(task_hash)
+        if cached is not None and cached.exists():
+            return cached
 
-    def _task_latest_path(self, task_hash: str) -> Path:
-        return self._task_dir(task_hash) / "latest.dat"
+        # If a name is provided, use <name>-<hash>
+        if task_name is not None:
+            path = self._tasks_dir / f"{task_name}-{task_hash}"
+            self._task_dir_cache[task_hash] = path
+            return path
+
+        # Try to find an existing directory whose name ends with the hash
+        for candidate in self._tasks_dir.iterdir():
+            if candidate.is_dir() and candidate.name.endswith(task_hash):
+                self._task_dir_cache[task_hash] = candidate
+                return candidate
+
+        # Nothing found — fall back to bare hash
+        path = self._tasks_dir / task_hash
+        self._task_dir_cache[task_hash] = path
+        return path
+
+    def _task_results_dir(self, task_hash: str, task_name: str | None = None) -> Path:
+        return self._task_dir(task_hash, task_name=task_name) / "results"
+
+    def _task_latest_path(self, task_hash: str, task_name: str | None = None) -> Path:
+        return self._task_dir(task_hash, task_name=task_name) / "latest.dat"
 
     def _flow_runs_dir(self, flow_name: str) -> Path:
         return self._flows_dir / flow_name / "runs"
@@ -72,10 +101,12 @@ class FileDatabase(BaseDatabase):
         self,
         task_hash: str,
         entry: Entry,
+        task_name: str = "",
     ) -> None:
         """Store a task execution result."""
-        task_dir = self._task_dir(task_hash)
-        results_dir = self._task_results_dir(task_hash)
+        name = task_name or None
+        task_dir = self._task_dir(task_hash, task_name=name)
+        results_dir = self._task_results_dir(task_hash, task_name=name)
         results_dir.mkdir(parents=True, exist_ok=True)
 
         # Create timestamp-based filename
@@ -90,15 +121,16 @@ class FileDatabase(BaseDatabase):
             self._serializer.save(entry_data, result_path)
 
             # Update latest symlink or copy
-            latest_path = self._task_latest_path(task_hash)
+            latest_path = self._task_latest_path(task_hash, task_name=name)
             self._serializer.save(entry_data, latest_path)
 
     def fetch_task_result(
         self,
         task_hash: str,
+        task_name: str = "",
     ) -> Entry | None:
         """Fetch the most recent result for a task."""
-        latest_path = self._task_latest_path(task_hash)
+        latest_path = self._task_latest_path(task_hash, task_name=task_name or None)
 
         if not latest_path.exists():
             return None
@@ -112,9 +144,10 @@ class FileDatabase(BaseDatabase):
     def fetch_task_history(
         self,
         task_hash: str,
+        task_name: str = "",
     ) -> list[Entry]:
         """Fetch all execution results for a task."""
-        results_dir = self._task_results_dir(task_hash)
+        results_dir = self._task_results_dir(task_hash, task_name=task_name or None)
 
         if not results_dir.exists():
             return []
@@ -141,9 +174,10 @@ class FileDatabase(BaseDatabase):
     def task_exists(
         self,
         task_hash: str,
+        task_name: str = "",
     ) -> bool:
         """Check if a task result exists."""
-        return self._task_latest_path(task_hash).exists()
+        return self._task_latest_path(task_hash, task_name=task_name or None).exists()
 
     def store_flow_run(
         self,
@@ -217,6 +251,8 @@ class FileDatabase(BaseDatabase):
         self._tasks_dir.mkdir(parents=True, exist_ok=True)
         self._flows_dir.mkdir(parents=True, exist_ok=True)
         self._snapshots_dir.mkdir(parents=True, exist_ok=True)
+
+        self._task_dir_cache.clear()
 
     def _serialize_entry(self, entry: Entry) -> dict[str, Any]:
         """Serialize an Entry to a dictionary."""

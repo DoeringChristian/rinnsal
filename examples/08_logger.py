@@ -70,9 +70,7 @@ def train_loop(logger: rs.Logger, epochs: int = 10) -> dict:
             ax.set_zlabel("Loss")
             ax.set_title(f"Loss Landscape (epoch {epoch})")
 
-            logger.add_figure(
-                "loss_landscape_3d", fig, interactive=True
-            )
+            logger.add_figure("loss_landscape_3d", fig, interactive=True)
             plt.close(fig)
 
     return {"final_loss": loss, "final_accuracy": accuracy}

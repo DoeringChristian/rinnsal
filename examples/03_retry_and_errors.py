@@ -35,6 +35,6 @@ if __name__ == "__main__":
     if "-s" in sys.argv:
         set_engine(ExecutionEngine(executor=InlineExecutor(capture=False)))
 
-    result = retry_flow()
-    print(f"Result: {result[-1].result}")
+    result = retry_flow().run()
+    print(f"Result: {result.result}")
     print(f"Total attempts: {attempt}")

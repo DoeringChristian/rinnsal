@@ -19,7 +19,7 @@ def add_builtin_flags(parser: argparse.ArgumentParser) -> None:
     builtin_group.add_argument(
         "--executor",
         type=str,
-        default="inline",
+        default="subprocess",
         help="Executor to use for task execution",
         choices=["inline", "subprocess", "ssh", "ray"],
     )
@@ -62,7 +62,7 @@ def extract_builtin_flags(namespace: argparse.Namespace) -> dict[str, Any]:
         Dictionary with keys: executor, filter, no_capture, no_cache, db_path
     """
     return {
-        "executor": getattr(namespace, "executor", "inline"),
+        "executor": getattr(namespace, "executor", "subprocess"),
         "filter": getattr(namespace, "filter", None),
         "no_capture": getattr(namespace, "no_capture", False),
         "no_cache": getattr(namespace, "no_cache", False),

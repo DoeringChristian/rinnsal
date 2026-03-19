@@ -21,23 +21,27 @@ class Database(Protocol):
         self,
         task_hash: str,
         entry: Entry,
+        task_name: str = "",
     ) -> None:
         """Store a task execution result.
 
         Args:
             task_hash: The content hash of the task
             entry: The execution result entry
+            task_name: Human-readable task name for directory naming
         """
         ...
 
     def fetch_task_result(
         self,
         task_hash: str,
+        task_name: str = "",
     ) -> Entry | None:
         """Fetch the most recent result for a task.
 
         Args:
             task_hash: The content hash of the task
+            task_name: Human-readable task name for directory naming
 
         Returns:
             The most recent Entry, or None if not found
@@ -47,11 +51,13 @@ class Database(Protocol):
     def fetch_task_history(
         self,
         task_hash: str,
+        task_name: str = "",
     ) -> list[Entry]:
         """Fetch all execution results for a task.
 
         Args:
             task_hash: The content hash of the task
+            task_name: Human-readable task name for directory naming
 
         Returns:
             List of all Entry objects, newest first
@@ -61,11 +67,13 @@ class Database(Protocol):
     def task_exists(
         self,
         task_hash: str,
+        task_name: str = "",
     ) -> bool:
         """Check if a task result exists.
 
         Args:
             task_hash: The content hash of the task
+            task_name: Human-readable task name for directory naming
 
         Returns:
             True if at least one result exists
@@ -122,24 +130,28 @@ class BaseDatabase(ABC):
         self,
         task_hash: str,
         entry: Entry,
+        task_name: str = "",
     ) -> None: ...
 
     @abstractmethod
     def fetch_task_result(
         self,
         task_hash: str,
+        task_name: str = "",
     ) -> Entry | None: ...
 
     @abstractmethod
     def fetch_task_history(
         self,
         task_hash: str,
+        task_name: str = "",
     ) -> list[Entry]: ...
 
     @abstractmethod
     def task_exists(
         self,
         task_hash: str,
+        task_name: str = "",
     ) -> bool: ...
 
     @abstractmethod
@@ -172,35 +184,46 @@ class InMemoryDatabase(BaseDatabase):
         self._flow_runs: dict[str, list[dict[str, Any]]] = {}
         self._run_counter = 0
 
+    def _key(self, task_hash: str, task_name: str) -> str:
+        return f"{task_name}-{task_hash}" if task_name else task_hash
+
     def store_task_result(
         self,
         task_hash: str,
         entry: Entry,
+        task_name: str = "",
     ) -> None:
-        if task_hash not in self._task_results:
-            self._task_results[task_hash] = []
-        self._task_results[task_hash].insert(0, entry)
+        key = self._key(task_hash, task_name)
+        if key not in self._task_results:
+            self._task_results[key] = []
+        self._task_results[key].insert(0, entry)
 
     def fetch_task_result(
         self,
         task_hash: str,
+        task_name: str = "",
     ) -> Entry | None:
-        results = self._task_results.get(task_hash, [])
+        key = self._key(task_hash, task_name)
+        results = self._task_results.get(key, [])
         return results[0] if results else None
 
     def fetch_task_history(
         self,
         task_hash: str,
+        task_name: str = "",
     ) -> list[Entry]:
-        return list(self._task_results.get(task_hash, []))
+        key = self._key(task_hash, task_name)
+        return list(self._task_results.get(key, []))
 
     def task_exists(
         self,
         task_hash: str,
+        task_name: str = "",
     ) -> bool:
+        key = self._key(task_hash, task_name)
         return (
-            task_hash in self._task_results
-            and len(self._task_results[task_hash]) > 0
+            key in self._task_results
+            and len(self._task_results[key]) > 0
         )
 
     def store_flow_run(

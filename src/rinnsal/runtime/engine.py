@@ -90,7 +90,7 @@ class ExecutionEngine:
 
             # Check cache first
             if self._use_cache and self._database is not None:
-                cached_entry = self._database.fetch_task_result(expr.hash)
+                cached_entry = self._database.fetch_task_result(expr.hash, expr.task_name)
                 if cached_entry is not None:
                     expr.set_result(cached_entry.result)
                     self._evaluated[expr.hash] = cached_entry.result
@@ -119,7 +119,7 @@ class ExecutionEngine:
                     },
                     timestamp=datetime.now(),
                 )
-                self._database.store_task_result(expr.hash, entry)
+                self._database.store_task_result(expr.hash, entry, expr.task_name)
 
         # Return results
         if len(expressions) == 1:
@@ -257,9 +257,9 @@ def _create_default_engine() -> ExecutionEngine:
     no_cache = "--no-cache" in sys.argv
 
     # Create executor with appropriate capture setting
-    from rinnsal.execution.inline import InlineExecutor
+    from rinnsal.execution.subprocess import SubprocessExecutor
 
-    executor = InlineExecutor(capture=not no_capture)
+    executor = SubprocessExecutor(capture=not no_capture)
 
     return ExecutionEngine(executor=executor, use_cache=not no_cache)
 

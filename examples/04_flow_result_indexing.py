@@ -28,21 +28,24 @@ def pipeline():
     m2 = train(mnist, lr=0.1).name("train_fast")
     m3 = train(cifar, lr=0.01).name("train_cifar")
 
-    evaluate(m1).name("eval_slow")
-    evaluate(m2).name("eval_fast")
-    evaluate(m3).name("eval_cifar")
+    e1 = evaluate(m1).name("eval_slow")
+    e2 = evaluate(m2).name("eval_fast")
+    e3 = evaluate(m3).name("eval_cifar")
+
+    return [mnist, cifar, m1, m2, m3, e1, e2, e3]
 
 
 if __name__ == "__main__":
-    result = pipeline()
+    fr = pipeline()
+    fr.run()
 
     # Integer indexing
-    print(f"First: {result[0].task_name}")
-    print(f"Last: {result[-1].task_name}")
+    print(f"First: {fr[0].task_name}")
+    print(f"Last: {fr[-1].task_name}")
 
     # String/regex indexing
-    print(f"\nTraining tasks: {[t.task_name for t in result['train_.*']]}")
+    print(f"\nTraining tasks: {[t.task_name for t in fr['train_.*']]}")
 
     # Callable indexing (filter by argument)
-    fast = result[lambda lr: lr == 0.1]
+    fast = fr[lambda lr: lr == 0.1]
     print(f"Fast (lr=0.1): {fast.task_name}")

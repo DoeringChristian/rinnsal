@@ -179,6 +179,20 @@ class TaskExpression(Expression):
 
         return all_deps
 
+    @property
+    def runs(self) -> Runs[Any]:
+        """Load previous execution results for this task expression.
+
+        Returns a Runs collection in chronological order (oldest first).
+        """
+        from rinnsal.core.types import Runs
+        from rinnsal.persistence.file_store import get_database
+
+        database = get_database()
+        entries = database.fetch_task_history(self.hash, self.task_name)
+        entries.reverse()  # newest-first -> oldest-first
+        return Runs(entries)
+
     def eval(self) -> Any:
         """Evaluate this task expression and return its result.
 

@@ -24,9 +24,9 @@ def pipeline(lr=0.01, epochs=10, threshold=0.8):
 
 if __name__ == "__main__":
     # Default parameters
-    r1 = pipeline()
-    print(f"Default: {r1[-1].result}")
+    r1 = pipeline().run()
+    print(f"Default: {r1.result}")
 
     # Override parameters
-    r2 = pipeline(lr=0.1, epochs=50, threshold=0.9)
-    print(f"Override: {r2[-1].result}")
+    r2 = pipeline(lr=0.1, epochs=50, threshold=0.9).run()
+    print(f"Override: {r2.result}")

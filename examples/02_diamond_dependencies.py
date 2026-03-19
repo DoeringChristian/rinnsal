@@ -52,6 +52,6 @@ if __name__ == "__main__":
     if "-s" in sys.argv:
         set_engine(ExecutionEngine(executor=InlineExecutor(capture=False)))
 
-    result = diamond()
-    print(f"Result: {result[-1].result}")
+    result = diamond().run()
+    print(f"Result: {result.result}")
     print(f"source() ran {run_count} time(s)")

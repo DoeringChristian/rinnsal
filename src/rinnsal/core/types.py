@@ -225,3 +225,7 @@ class Runs(Generic[T]):
     def to_list(self) -> list[T]:
         """Return a copy of the entries as a list."""
         return list(self._entries)
+
+
+# Convenience alias for task history lookups
+TaskRuns = Runs[Entry]

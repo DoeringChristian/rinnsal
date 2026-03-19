@@ -21,30 +21,30 @@ class TestFileDatabase:
     def test_store_and_fetch(self, file_db):
         entry = Entry(result=42, log="some output")
 
-        file_db.store_task_result("hash1", entry)
-        fetched = file_db.fetch_task_result("hash1")
+        file_db.store_task_result("hash1", entry, "mytask")
+        fetched = file_db.fetch_task_result("hash1", "mytask")
 
         assert fetched is not None
         assert fetched.result == 42
         assert fetched.log == "some output"
 
     def test_fetch_nonexistent(self, file_db):
-        assert file_db.fetch_task_result("nonexistent") is None
+        assert file_db.fetch_task_result("nonexistent", "mytask") is None
 
     def test_task_exists(self, file_db):
         entry = Entry(result=42)
 
-        assert not file_db.task_exists("hash1")
-        file_db.store_task_result("hash1", entry)
-        assert file_db.task_exists("hash1")
+        assert not file_db.task_exists("hash1", "mytask")
+        file_db.store_task_result("hash1", entry, "mytask")
+        assert file_db.task_exists("hash1", "mytask")
 
     def test_fetch_history(self, file_db):
         # Store multiple results with small delay to ensure different timestamps
         for i in range(3):
-            file_db.store_task_result("hash1", Entry(result=i + 1))
+            file_db.store_task_result("hash1", Entry(result=i + 1), "mytask")
             time.sleep(0.01)  # Small delay for different timestamps
 
-        history = file_db.fetch_task_history("hash1")
+        history = file_db.fetch_task_history("hash1", "mytask")
         assert len(history) == 3
         # Most recent first
         assert history[0].result == 3
@@ -55,8 +55,8 @@ class TestFileDatabase:
             metadata={"key": "value", "number": 123},
         )
 
-        file_db.store_task_result("hash1", entry)
-        fetched = file_db.fetch_task_result("hash1")
+        file_db.store_task_result("hash1", entry, "mytask")
+        fetched = file_db.fetch_task_result("hash1", "mytask")
 
         assert fetched.metadata == {"key": "value", "number": 123}
 
@@ -66,8 +66,8 @@ class TestFileDatabase:
             snapshot=Snapshot(hash="abc123", path=Path("/some/path")),
         )
 
-        file_db.store_task_result("hash1", entry)
-        fetched = file_db.fetch_task_result("hash1")
+        file_db.store_task_result("hash1", entry, "mytask")
+        fetched = file_db.fetch_task_result("hash1", "mytask")
 
         assert fetched.snapshot is not None
         assert fetched.snapshot.hash == "abc123"
@@ -78,8 +78,8 @@ class TestFileDatabase:
             result={"nested": {"data": [1, 2, 3]}, "flag": True},
         )
 
-        file_db.store_task_result("hash1", entry)
-        fetched = file_db.fetch_task_result("hash1")
+        file_db.store_task_result("hash1", entry, "mytask")
+        fetched = file_db.fetch_task_result("hash1", "mytask")
 
         assert fetched.result == {"nested": {"data": [1, 2, 3]}, "flag": True}
 
@@ -119,20 +119,28 @@ class TestFileDatabase:
         assert runs == []
 
     def test_clear(self, file_db):
-        file_db.store_task_result("hash1", Entry(result=42))
+        file_db.store_task_result("hash1", Entry(result=42), "mytask")
         file_db.store_flow_run("my_flow", ["hash1"])
 
         file_db.clear()
 
-        assert not file_db.task_exists("hash1")
+        assert not file_db.task_exists("hash1", "mytask")
         assert file_db.fetch_flow_runs("my_flow") == []
 
     def test_directory_structure(self, file_db):
-        file_db.store_task_result("hash1", Entry(result=42))
+        file_db.store_task_result("hash1", Entry(result=42), "mytask")
         file_db.store_flow_run("my_flow", ["hash1"])
 
         assert (file_db.root / "tasks").exists()
         assert (file_db.root / "flows").exists()
         assert (file_db.root / "snapshots").exists()
-        assert (file_db.root / "tasks" / "hash1").exists()
+        assert (file_db.root / "tasks" / "mytask-hash1").exists()
         assert (file_db.root / "flows" / "my_flow" / "runs").exists()
+
+    def test_named_task_directory(self, file_db):
+        """Task directory uses <name>-<hash> format."""
+        file_db.store_task_result("abc123", Entry(result=99), "load_data")
+
+        task_dir = file_db.root / "tasks" / "load_data-abc123"
+        assert task_dir.exists()
+        assert (task_dir / "latest.dat").exists()

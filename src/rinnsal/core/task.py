@@ -7,7 +7,7 @@ from typing import Any, Callable, ParamSpec, TypeVar, overload
 
 from rinnsal.core.expression import TaskExpression
 from rinnsal.core.hashing import compute_task_hash
-from rinnsal.core.registry import get_registry, register_task_in_context
+from rinnsal.core.registry import get_registry
 from rinnsal.core.types import Entry, Runs
 
 P = ParamSpec("P")
@@ -61,9 +61,6 @@ class TaskDef:
 
         if "name" in kwargs:
             expr.name(str(kwargs["name"]))
-
-        # Register in the current flow context if one exists
-        register_task_in_context(expr)
 
         return expr
 

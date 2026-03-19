@@ -15,9 +15,10 @@ def compute(n):
 
 @flow
 def pipeline():
-    compute(1).name("task_1")
-    compute(2).name("task_2")
-    compute(3).name("task_3")
+    t1 = compute(1).name("task_1")
+    t2 = compute(2).name("task_2")
+    t3 = compute(3).name("task_3")
+    return [t1, t2, t3]
 
 
 if __name__ == "__main__":
@@ -27,10 +28,11 @@ if __name__ == "__main__":
     executor = SubprocessExecutor(max_workers=4)
     set_engine(ExecutionEngine(executor=executor))
 
-    result = pipeline()
+    fr = pipeline()
+    fr.run()
 
-    for t in result:
+    for t in fr:
         print(f"{t.task_name}: pid={t.result['pid']}")
 
-    worker_pids = {t.result["pid"] for t in result}
+    worker_pids = {t.result["pid"] for t in fr}
     print(f"Tasks ran in separate process: {main_pid not in worker_pids}")

@@ -166,11 +166,16 @@ class TestFlowExecution:
         @flow
         def my_flow():
             src = source()
-            double(src)
+            d = double(src)
+            return [src, d]
 
         result = my_flow()
         assert isinstance(result, FlowResult)
         assert len(result) == 2
+
+        outputs = result.run()
+        assert outputs[0].result == 10
+        assert outputs[1].result == 20
 
     def test_flow_with_params(self, engine):
         @task
@@ -179,10 +184,10 @@ class TestFlowExecution:
 
         @flow
         def my_flow(factor=2):
-            multiply(10, factor)
+            return multiply(10, factor)
 
-        result = my_flow(factor=3)
-        assert result[0].result == 30
+        result = my_flow(factor=3).run()
+        assert result.result == 30
 
     def test_flow_result_indexing(self, engine):
         @task
@@ -196,13 +201,15 @@ class TestFlowExecution:
         @flow
         def my_flow():
             src = source()
-            double(src)
+            d = double(src)
+            return [src, d]
 
-        result = my_flow()
+        fr = my_flow()
+        fr.run()
 
         # Integer indexing
-        assert result[0].result == 10
-        assert result[-1].result == 20
+        assert fr[0].result == 10
+        assert fr[-1].result == 20
 
     def test_flow_result_string_indexing(self, engine):
         @task
@@ -216,15 +223,17 @@ class TestFlowExecution:
         @flow
         def my_flow():
             src = source()
-            double(src)
+            d = double(src)
+            return [src, d]
 
-        result = my_flow()
+        fr = my_flow()
+        fr.run()
 
         # String indexing (function name)
-        src = result["source"]
+        src = fr["source"]
         assert src.result == 10
 
-        dbl = result["double"]
+        dbl = fr["double"]
         assert dbl.result == 20
 
     def test_flow_result_named_task(self, engine):
@@ -234,17 +243,50 @@ class TestFlowExecution:
 
         @flow
         def my_flow():
-            process(10).name("step1")
-            process(20).name("step2")
+            a = process(10).name("step1")
+            b = process(20).name("step2")
+            return [a, b]
 
-        result = my_flow()
+        fr = my_flow()
+        fr.run()
 
         # Access by name
-        step1 = result["step1"]
+        step1 = fr["step1"]
         assert step1.result == 20
 
-        step2 = result["step2"]
+        step2 = fr["step2"]
         assert step2.result == 40
+
+    def test_flow_dict_return(self, engine):
+        @task
+        def source():
+            return 10
+
+        @task
+        def double(x):
+            return x * 2
+
+        @flow
+        def my_flow():
+            src = source()
+            d = double(src)
+            return {"source": src, "doubled": d}
+
+        outputs = my_flow().run()
+        assert outputs["source"].result == 10
+        assert outputs["doubled"].result == 20
+
+    def test_flow_single_return(self, engine):
+        @task
+        def source():
+            return 42
+
+        @flow
+        def my_flow():
+            return source()
+
+        output = my_flow().run()
+        assert output.result == 42
 
 
 class TestTaskEval:

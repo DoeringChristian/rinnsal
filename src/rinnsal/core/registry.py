@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 import weakref
-from contextlib import contextmanager
-from contextvars import ContextVar
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from rinnsal.core.expression import TaskExpression
@@ -85,66 +83,3 @@ _global_registry = TaskRegistry()
 def get_registry() -> TaskRegistry:
     """Get the global task registry."""
     return _global_registry
-
-
-class FlowContext:
-    """Context for tracking tasks created within a flow.
-
-    Tasks created inside a flow context are tracked separately and
-    cleaned up when the context exits, ensuring flow self-containment.
-    """
-
-    def __init__(self) -> None:
-        self._tasks: list[TaskExpression] = []
-        self._parent: FlowContext | None = None
-
-    def add_task(self, expr: TaskExpression) -> None:
-        """Register a task expression in this context."""
-        self._tasks.append(expr)
-
-    def get_tasks(self) -> list[TaskExpression]:
-        """Get all tasks registered in this context."""
-        return list(self._tasks)
-
-    def clear(self) -> None:
-        """Clear all tasks from this context."""
-        self._tasks.clear()
-
-    def __len__(self) -> int:
-        return len(self._tasks)
-
-
-# Context variable for the current flow context
-_flow_context: ContextVar[FlowContext | None] = ContextVar(
-    "flow_context", default=None
-)
-
-
-def get_flow_context() -> FlowContext | None:
-    """Get the current flow context, or None if not in a flow."""
-    return _flow_context.get()
-
-
-@contextmanager
-def flow_scope() -> Iterator[FlowContext]:
-    """Create a new flow context scope.
-
-    Tasks created within this scope are tracked and can be retrieved
-    for DAG construction.
-    """
-    ctx = FlowContext()
-    parent = _flow_context.get()
-    ctx._parent = parent
-
-    token = _flow_context.set(ctx)
-    try:
-        yield ctx
-    finally:
-        _flow_context.reset(token)
-
-
-def register_task_in_context(expr: TaskExpression) -> None:
-    """Register a task expression in the current flow context if one exists."""
-    ctx = _flow_context.get()
-    if ctx is not None:
-        ctx.add_task(expr)

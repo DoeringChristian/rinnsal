@@ -34,12 +34,12 @@ if __name__ == "__main__":
         # First run - cache miss
         run_count = 0
         get_registry().clear()
-        r1 = pipeline(x=5)
-        print(f"Run 1: {r1[-1].result}, executed {run_count} time(s)")
+        r1 = pipeline(x=5).run()
+        print(f"Run 1: {r1.result}, executed {run_count} time(s)")
 
         # Second run - cache hit
         engine.clear_cache()
         get_registry().clear()
         run_count = 0
-        r2 = pipeline(x=5)
-        print(f"Run 2: {r2[-1].result}, executed {run_count} time(s)")
+        r2 = pipeline(x=5).run()
+        print(f"Run 2: {r2.result}, executed {run_count} time(s)")
