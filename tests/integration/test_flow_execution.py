@@ -1,5 +1,6 @@
 """Integration tests for task and flow execution."""
 
+import sys
 import pytest
 
 from rinnsal.core.task import task
@@ -287,6 +288,70 @@ class TestFlowExecution:
 
         output = my_flow().run()
         assert output.result == 42
+
+
+class TestFailedTaskOutput:
+    """Test that stderr from failed tasks is printed immediately."""
+
+    def test_stderr_printed_on_failure(self, engine, capsys):
+        """When a task writes to stderr and then fails, the output is flushed."""
+
+        @task
+        def broken():
+            print("debug info", file=sys.stderr)
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+            rinnsal_eval(broken())
+
+        captured = capsys.readouterr()
+        assert "debug info" in captured.err
+
+    def test_stdout_printed_on_failure(self, engine, capsys):
+        """Captured stdout from a failed task is also flushed."""
+
+        @task
+        def broken():
+            print("some output")
+            raise RuntimeError("boom")
+
+        with pytest.raises(RuntimeError, match="boom"):
+            rinnsal_eval(broken())
+
+        captured = capsys.readouterr()
+        assert "some output" in captured.err
+
+    def test_no_output_on_success(self, engine, capsys):
+        """Successful tasks do not flush captured output to stderr."""
+
+        @task
+        def ok():
+            print("hello", file=sys.stderr)
+            return 42
+
+        result = rinnsal_eval(ok())
+        assert result == 42
+
+        captured = capsys.readouterr()
+        assert "hello" not in captured.err
+
+    def test_retry_flushes_all_attempts(self, engine, capsys):
+        """On exhausted retries, output from all attempts is flushed."""
+        attempt = 0
+
+        @task(retry=1)
+        def flaky():
+            nonlocal attempt
+            attempt += 1
+            print(f"attempt {attempt}", file=sys.stderr)
+            raise RuntimeError("still broken")
+
+        with pytest.raises(RuntimeError, match="still broken"):
+            rinnsal_eval(flaky())
+
+        captured = capsys.readouterr()
+        assert "attempt 1" in captured.err
+        assert "attempt 2" in captured.err
 
 
 class TestTaskEval:

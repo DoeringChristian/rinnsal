@@ -210,7 +210,13 @@ class ExecutionEngine:
                 # Will retry
                 continue
 
-        # All attempts failed
+        # All attempts failed — flush captured stderr so the user sees it
+        if combined_log:
+            import sys
+
+            sys.stderr.write(combined_log)
+            sys.stderr.flush()
+
         if last_error is not None:
             raise last_error
         raise RuntimeError(
