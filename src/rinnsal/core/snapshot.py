@@ -39,11 +39,35 @@ def find_git_root(start: Path | None = None) -> Path | None:
     return None
 
 
+_ENV_MARKERS = (
+    "site-packages",
+    ".pixi",
+    ".venv",
+    "venv",
+    ".conda",
+    "conda-meta",
+    "node_modules",
+)
+
+
+def _is_env_path(relative: str) -> bool:
+    """Return True if a repo-relative path points inside an environment.
+
+    These paths contain compiled extensions (.so/.pyd) that cannot be
+    relocated, so they must not be remapped into a snapshot.
+    """
+    parts = Path(relative).parts
+    return any(marker in parts for marker in _ENV_MARKERS)
+
+
 def build_pythonpath(snapshot_path: Path | None = None) -> str:
     """Build PYTHONPATH for a subprocess.
 
     When snapshot_path is set, remap repo-local sys.path entries to their
     snapshot equivalents so that the subprocess imports from the snapshot.
+    Paths that point inside virtual environments or package managers are
+    kept as-is because they contain compiled extensions that cannot be
+    relocated.
     """
     if snapshot_path is not None:
         git_root = find_git_root()
@@ -55,8 +79,11 @@ def build_pythonpath(snapshot_path: Path | None = None) -> str:
             for p in sys.path:
                 resolved = str(Path(p).resolve()) if p else ""
                 if resolved.startswith(git_root_str):
-                    relative = resolved[len(git_root_str) :]
-                    remapped.append(snapshot_str + relative)
+                    relative = resolved[len(git_root_str):]
+                    if _is_env_path(relative):
+                        remapped.append(p)
+                    else:
+                        remapped.append(snapshot_str + relative)
                 else:
                     remapped.append(p)
             pythonpath = os.pathsep.join(remapped)
@@ -147,7 +174,7 @@ class SnapshotManager:
             # Skip __pycache__, venvs, and .rinnsal artifacts
             parts = py_file.relative_to(root).parts
             if any(
-                p in ("__pycache__", ".venv", "venv", ".rinnsal")
+                p in ("__pycache__", ".venv", "venv", ".pixi", ".conda", ".rinnsal")
                 for p in parts
             ):
                 continue
@@ -164,7 +191,7 @@ class SnapshotManager:
             # Skip __pycache__, venvs, and .rinnsal artifacts
             parts = py_file.relative_to(src).parts
             if any(
-                p in ("__pycache__", ".venv", "venv", ".rinnsal")
+                p in ("__pycache__", ".venv", "venv", ".pixi", ".conda", ".rinnsal")
                 for p in parts
             ):
                 continue

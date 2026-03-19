@@ -1,7 +1,10 @@
 """Tests for snapshot functionality."""
 
+import os
+import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
@@ -10,6 +13,7 @@ from rinnsal.core.snapshot import (
     find_git_root,
     build_pythonpath,
     get_snapshot_manager,
+    _is_env_path,
 )
 
 
@@ -102,6 +106,69 @@ class TestBuildPythonpath:
 
             # Should contain the snapshot path
             assert tmpdir in pythonpath
+
+
+class TestEnvPathDetection:
+    """Test that environment paths are not remapped into snapshots."""
+
+    def test_pixi_site_packages_is_env_path(self):
+        assert _is_env_path("/.pixi/envs/default/lib/python3.12/site-packages")
+
+    def test_venv_site_packages_is_env_path(self):
+        assert _is_env_path("/.venv/lib/python3.12/site-packages")
+
+    def test_conda_is_env_path(self):
+        assert _is_env_path("/.conda/envs/myenv/lib/python3.12")
+
+    def test_source_dir_is_not_env_path(self):
+        assert not _is_env_path("/src/mypackage")
+
+    def test_empty_relative_is_not_env_path(self):
+        assert not _is_env_path("/")
+
+    def test_remap_skips_pixi_site_packages(self):
+        """build_pythonpath must not remap .pixi paths into the snapshot."""
+        git_root = find_git_root()
+        if git_root is None:
+            pytest.skip("No git root")
+
+        pixi_path = str(git_root / ".pixi" / "envs" / "default" / "lib" / "python3.12" / "site-packages")
+        src_path = str(git_root / "src")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            snapshot_path = Path(tmpdir)
+            snapshot_str = str(snapshot_path.resolve())
+
+            fake_sys_path = [src_path, pixi_path, "/usr/lib/python3"]
+            with mock.patch.object(sys, "path", fake_sys_path):
+                pythonpath = build_pythonpath(snapshot_path)
+
+            entries = pythonpath.split(os.pathsep)
+            # src should be remapped
+            assert any(e.startswith(snapshot_str) for e in entries)
+            # .pixi path should NOT be remapped — kept as original
+            assert pixi_path in entries
+
+    def test_remap_skips_venv_site_packages(self):
+        """build_pythonpath must not remap .venv paths into the snapshot."""
+        git_root = find_git_root()
+        if git_root is None:
+            pytest.skip("No git root")
+
+        venv_path = str(git_root / ".venv" / "lib" / "python3.12" / "site-packages")
+        src_path = str(git_root / "src")
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            snapshot_path = Path(tmpdir)
+            snapshot_str = str(snapshot_path.resolve())
+
+            fake_sys_path = [src_path, venv_path]
+            with mock.patch.object(sys, "path", fake_sys_path):
+                pythonpath = build_pythonpath(snapshot_path)
+
+            entries = pythonpath.split(os.pathsep)
+            assert any(e.startswith(snapshot_str) for e in entries)
+            assert venv_path in entries
 
 
 class TestGlobalSnapshotManager:
