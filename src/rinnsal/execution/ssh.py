@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import threading
 import tempfile
 from concurrent.futures import Future, ThreadPoolExecutor
 from pathlib import Path
@@ -11,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 import cloudpickle
 
 from rinnsal.execution.executor import ExecutionResult, Executor
+from rinnsal.execution.provisioner import AutoProvisioner, Provisioner
 
 if TYPE_CHECKING:
     from rinnsal.core.expression import TaskExpression
@@ -33,12 +35,14 @@ class SSHHost:
         port: int = 22,
         key_path: Path | str | None = None,
         python_path: str = "python3",
+        known_hosts: Any = None,
     ) -> None:
         self.hostname = hostname
         self.username = username
         self.port = port
         self.key_path = Path(key_path) if key_path else None
         self.python_path = python_path
+        self.known_hosts = known_hosts
 
     def __repr__(self) -> str:
         user_str = f"{self.username}@" if self.username else ""
@@ -63,6 +67,8 @@ class SSHExecutor(Executor):
         capture: bool = True,
         snapshot: bool = False,
         max_connections_per_host: int = 4,
+        provisioner: Provisioner | None = None,
+        work_dir: str = "~/.rinnsal/worker",
     ) -> None:
         if not HAS_ASYNCSSH:
             raise ImportError(
@@ -77,6 +83,11 @@ class SSHExecutor(Executor):
             max_workers=len(hosts) * max_connections_per_host
         )
         self._host_index = 0
+        self._provisioner = provisioner if provisioner is not None else AutoProvisioner()
+        self._work_dir = work_dir
+        self._provision_lock = threading.Lock()
+        self._provision_events: dict[str, threading.Event] = {}
+        self._provision_errors: dict[str, Exception] = {}
 
     @property
     def hosts(self) -> list[SSHHost]:
@@ -201,10 +212,34 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
             connect_kwargs["username"] = host.username
         if host.key_path:
             connect_kwargs["client_keys"] = [str(host.key_path)]
+        connect_kwargs["known_hosts"] = host.known_hosts
 
         async with asyncssh.connect(**connect_kwargs) as conn:
+            # Provision the host if not already done; other threads wait
+            needs_provision = False
+            with self._provision_lock:
+                if host.hostname not in self._provision_events:
+                    self._provision_events[host.hostname] = threading.Event()
+                    needs_provision = True
+                event = self._provision_events[host.hostname]
+
+            if needs_provision:
+                try:
+                    await self._provision_host(conn, host)
+                except Exception as e:
+                    self._provision_errors[host.hostname] = e
+                    raise
+                finally:
+                    event.set()
+            else:
+                event.wait()
+
+            if host.hostname in self._provision_errors:
+                raise self._provision_errors[host.hostname]
+
+            python_cmd = self._provisioner.python_command(self._work_dir)
             result = await conn.run(
-                f"{host.python_path} -c '{remote_script}'",
+                f"{python_cmd} -c '{remote_script}'",
                 check=False,
             )
 
@@ -251,6 +286,18 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
                     success=False,
                     error=e,
                 )
+
+    async def _provision_host(self, conn: Any, host: SSHHost) -> None:
+        """Run provisioning script on a remote host."""
+        script = self._provisioner.provision_script(self._work_dir)
+        result = await conn.run(
+            f"bash <<'__RINNSAL_PROVISION__'\n{script}\n__RINNSAL_PROVISION__",
+            check=False,
+        )
+        if result.exit_status != 0:
+            raise RuntimeError(
+                f"Provisioning failed on {host.hostname}:\n{result.stderr}"
+            )
 
     def shutdown(self, wait: bool = True) -> None:
         """Shutdown the executor."""

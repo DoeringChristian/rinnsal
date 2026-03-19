@@ -27,6 +27,7 @@ def notify_task_created(expr: TaskExpression) -> None:
     if capture is not None:
         capture.append(expr)
 
+
 # Global setting for progress display
 _show_progress: bool = True
 
@@ -410,7 +411,10 @@ class FlowDef:
                 _capture_stack.reset(token)
 
         return FlowResult(
-            return_value, self.name, builtin_flags, captured_tasks=captured,
+            return_value,
+            self.name,
+            builtin_flags,
+            captured_tasks=captured,
         )
 
     def __repr__(self) -> str:
@@ -448,7 +452,9 @@ def flow(func: Callable[P, R]) -> FlowDef: ...
 
 
 @overload
-def flow(*, capture_tasks: bool = True) -> Callable[[Callable[P, R]], FlowDef]: ...
+def flow(
+    *, capture_tasks: bool = True
+) -> Callable[[Callable[P, R]], FlowDef]: ...
 
 
 def flow(

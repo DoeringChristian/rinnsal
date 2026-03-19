@@ -38,6 +38,7 @@ def save_checkpoint(model):
 
 # ---------- capture_tasks=True (default) ----------
 
+
 @flow
 def pipeline_with_capture(lr=0.01):
     data = load_data()
@@ -51,6 +52,7 @@ def pipeline_with_capture(lr=0.01):
 
 
 # ---------- capture_tasks=False ----------
+
 
 @flow(capture_tasks=False)
 def pipeline_without_capture(lr=0.01):

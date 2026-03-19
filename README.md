@@ -213,6 +213,23 @@ executor = SubprocessExecutor(max_workers=4)
 set_engine(ExecutionEngine(executor=executor))
 ```
 
+**SSHExecutor**: Runs tasks on remote machines over SSH. The remote host
+needs Python 3 and `cloudpickle` installed:
+
+```python
+from rinnsal.execution.ssh import SSHExecutor, SSHHost
+from rinnsal.runtime.engine import ExecutionEngine, set_engine
+
+hosts = [
+    SSHHost("gpu-server", username="alice"),
+    SSHHost("gpu-server-2", username="alice", key_path="~/.ssh/id_ed25519"),
+]
+executor = SSHExecutor(hosts=hosts)
+set_engine(ExecutionEngine(executor=executor))
+```
+
+Tasks are round-robined across hosts. Use multiple hosts to distribute work.
+
 ### Config Objects
 
 Structured configuration with attribute access:
@@ -280,6 +297,7 @@ See the `examples/` directory:
 - `08_logger.py` - Logging scalars, text, and figures
 - `09_independent_task.py` - Tasks outside flows, `.runs` history
 - `10_capture_tasks.py` - Automatic task capture in flows
+- `11_ssh_executor.py` - Remote execution over SSH
 
 ## Development
 
