@@ -113,9 +113,7 @@ class FlowResult:
                     was_cached = self._check_cached(engine, expr)
                     try:
                         engine.evaluate(expr)
-                        progress.complete(
-                            expr.task_name, cached=was_cached
-                        )
+                        progress.complete(expr.task_name, cached=was_cached)
                     except Exception as e:
                         failed_hashes.add(expr.hash)
                         errors.append((expr.task_name, e))
@@ -172,7 +170,11 @@ class FlowResult:
 
     def _get_or_create_engine(self) -> Any:
         """Get existing engine or create one from builtin flags."""
-        from rinnsal.runtime.engine import ExecutionEngine, set_engine, _default_engine
+        from rinnsal.runtime.engine import (
+            ExecutionEngine,
+            set_engine,
+            _default_engine,
+        )
 
         if _default_engine is not None:
             self._builtin_flags["_engine_preset"] = True
@@ -202,7 +204,9 @@ class FlowResult:
 
     def _check_cached(self, engine: Any, expr: TaskExpression) -> bool:
         if engine.database is not None and engine.use_cache:
-            cached = engine.database.fetch_task_result(expr.hash, expr.task_name)
+            cached = engine.database.fetch_task_result(
+                expr.hash, expr.task_name
+            )
             return cached is not None
         return False
 
@@ -305,7 +309,9 @@ class FlowResult:
         return FlowResult._from_tasks(matches, self._flow_name)
 
     @classmethod
-    def _from_tasks(cls, tasks: list[TaskExpression], flow_name: str) -> FlowResult:
+    def _from_tasks(
+        cls, tasks: list[TaskExpression], flow_name: str
+    ) -> FlowResult:
         """Create a FlowResult wrapping a plain task list (for filtering)."""
         result = cls.__new__(cls)
         result._return_value = tasks
@@ -388,18 +394,14 @@ def _create_executor(name: str, capture: bool = True) -> Any:
         except ImportError:
             raise ValueError("Subprocess executor not available")
     elif name == "ssh":
-        raise ValueError(
-            "SSH executor requires additional configuration"
-        )
+        raise ValueError("SSH executor requires additional configuration")
     elif name == "ray":
         try:
             from rinnsal.execution.ray_executor import RayExecutor
 
             return RayExecutor(capture=capture)
         except ImportError:
-            raise ValueError(
-                "Ray executor requires ray to be installed"
-            )
+            raise ValueError("Ray executor requires ray to be installed")
     else:
         raise ValueError(f"Unknown executor: {name}")
 
