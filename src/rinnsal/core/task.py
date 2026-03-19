@@ -62,6 +62,9 @@ class TaskDef:
         if "name" in kwargs:
             expr.name(str(kwargs["name"]))
 
+        from rinnsal.core.flow import notify_task_created
+        notify_task_created(expr)
+
         return expr
 
     def __repr__(self) -> str:

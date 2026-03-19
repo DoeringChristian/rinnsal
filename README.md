@@ -109,6 +109,52 @@ train_tasks = result["train_.*"]
 fast_tasks = result[lambda lr: lr > 0.01]
 ```
 
+### Task Capture
+
+By default, flows capture **all** tasks created inside the flow body and evaluate
+them on `.run()`, even if they aren't part of the return value. This is useful for
+side-effect tasks like logging, checkpointing, or metrics:
+
+```python
+@flow
+def pipeline():
+    data = load_data()
+    model = train(data)
+
+    # These run automatically — no need to return them
+    log_metrics(model)
+    save_checkpoint(model)
+
+    return model
+```
+
+To opt out and only evaluate returned tasks:
+
+```python
+@flow(capture_tasks=False)
+def pipeline():
+    data = load_data()
+    model = train(data)
+    log_metrics(model)       # will NOT run
+    save_checkpoint(model)   # will NOT run
+    return model
+```
+
+### Task History
+
+Access previous execution results for any task expression via `.runs`:
+
+```python
+expr = train(data, lr=0.01)
+
+runs = expr.runs        # Runs collection, chronological order
+runs[-1].result         # most recent result
+runs[0].result          # oldest result
+len(runs)               # number of historical runs
+```
+
+Results are persisted to disk automatically and available across sessions.
+
 ### CLI Flags
 
 Built-in flags work automatically:
@@ -231,6 +277,9 @@ See the `examples/` directory:
 - `05_config_and_parameters.py` - Config objects
 - `06_caching_and_persistence.py` - FileDatabase
 - `07_subprocess_executor.py` - Process isolation
+- `08_logger.py` - Logging scalars, text, and figures
+- `09_independent_task.py` - Tasks outside flows, `.runs` history
+- `10_capture_tasks.py` - Automatic task capture in flows
 
 ## Development
 

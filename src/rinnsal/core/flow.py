@@ -7,11 +7,25 @@ import re
 import inspect
 from typing import Any, Callable, ParamSpec, TypeVar, overload
 
+from contextvars import ContextVar
+
 from rinnsal.core.expression import TaskExpression
 from rinnsal.core.graph import DAG
 from rinnsal.core.types import Entry, Runs
 from rinnsal.runtime.engine import get_engine
 from rinnsal.progress.bar import ProgressBar, SilentProgress
+
+# Context variable for capturing tasks created during flow execution
+_capture_stack: ContextVar[list[TaskExpression] | None] = ContextVar(
+    "_capture_stack", default=None
+)
+
+
+def notify_task_created(expr: TaskExpression) -> None:
+    """Called by TaskDef.__call__ to register a newly created expression."""
+    capture = _capture_stack.get(None)
+    if capture is not None:
+        capture.append(expr)
 
 # Global setting for progress display
 _show_progress: bool = True
@@ -61,11 +75,20 @@ class FlowResult:
         return_value: Any,
         flow_name: str,
         builtin_flags: dict[str, Any],
+        captured_tasks: list[TaskExpression] | None = None,
     ) -> None:
         self._return_value = return_value
         self._flow_name = flow_name
         self._builtin_flags = builtin_flags
-        self._tasks = _extract_tasks(return_value)
+        returned_tasks = _extract_tasks(return_value)
+        # Merge captured tasks (all created during flow body) with returned tasks,
+        # preserving order and deduplicating by hash
+        if captured_tasks:
+            seen = {t.hash for t in returned_tasks}
+            extra = [t for t in captured_tasks if t.hash not in seen]
+            self._tasks = returned_tasks + extra
+        else:
+            self._tasks = returned_tasks
 
     @property
     def tasks(self) -> list[TaskExpression]:
@@ -334,8 +357,10 @@ class FlowDef:
     def __init__(
         self,
         func: Callable[..., Any],
+        capture_tasks: bool = True,
     ) -> None:
         self._func = func
+        self._capture_tasks = capture_tasks
         functools.update_wrapper(self, func)
 
     @property
@@ -371,10 +396,22 @@ class FlowDef:
         # Programmatic kwargs override CLI defaults
         merged_kwargs = {**cli_kwargs, **kwargs}
 
-        # Call flow function to build expression graph
-        return_value = self._func(**merged_kwargs)
+        # Call flow function to build expression graph,
+        # optionally capturing all created tasks
+        captured: list[TaskExpression] | None = None
+        if self._capture_tasks:
+            captured = []
+            token = _capture_stack.set(captured)
 
-        return FlowResult(return_value, self.name, builtin_flags)
+        try:
+            return_value = self._func(**merged_kwargs)
+        finally:
+            if self._capture_tasks:
+                _capture_stack.reset(token)
+
+        return FlowResult(
+            return_value, self.name, builtin_flags, captured_tasks=captured,
+        )
 
     def __repr__(self) -> str:
         return f"FlowDef({self.name})"
@@ -406,7 +443,19 @@ def _create_executor(name: str, capture: bool = True) -> Any:
         raise ValueError(f"Unknown executor: {name}")
 
 
-def flow(func: Callable[P, R]) -> FlowDef:
+@overload
+def flow(func: Callable[P, R]) -> FlowDef: ...
+
+
+@overload
+def flow(*, capture_tasks: bool = True) -> Callable[[Callable[P, R]], FlowDef]: ...
+
+
+def flow(
+    func: Callable[P, R] | None = None,
+    *,
+    capture_tasks: bool = True,
+) -> FlowDef | Callable[[Callable[P, R]], FlowDef]:
     """Decorator to create a flow.
 
     A flow wraps a function that builds a task DAG. The flow function
@@ -414,7 +463,10 @@ def flow(func: Callable[P, R]) -> FlowDef:
     on the result to execute, or .results() to load from cache.
 
     Args:
-        func: The function that builds the task DAG
+        func: The function to wrap (when used without parentheses)
+        capture_tasks: If True (default), all tasks created inside the
+            flow body are captured and evaluated on .run(), even if
+            they are not included in the return value.
 
     Returns:
         A FlowDef that returns a FlowResult when called
@@ -432,4 +484,10 @@ def flow(func: Callable[P, R]) -> FlowDef:
         # Execute:
         outputs = result.run()
     """
-    return FlowDef(func)
+    if func is not None:
+        return FlowDef(func, capture_tasks=capture_tasks)
+
+    def decorator(fn: Callable[P, R]) -> FlowDef:
+        return FlowDef(fn, capture_tasks=capture_tasks)
+
+    return decorator
