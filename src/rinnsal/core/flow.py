@@ -104,6 +104,10 @@ class FlowResult:
         if not self._tasks:
             return self._return_value
 
+        filter_pattern = self._builtin_flags.get("filter")
+        if filter_pattern:
+            return self._run_filtered(filter_pattern)
+
         # Collect all tasks: returned + transitive deps
         all_tasks: set[TaskExpression] = set(self._tasks)
         for t in self._tasks:
@@ -130,18 +134,149 @@ class FlowResult:
                     progress.skip(expr.task_name)
                     continue
 
+                progress.start(expr.task_name)
+                try:
+                    engine.execute(expr)
+                    progress.complete(expr.task_name, cached=False)
+                except Exception as e:
+                    failed_hashes.add(expr.hash)
+                    errors.append((expr.task_name, e))
+                    progress.fail(expr.task_name)
+
+            progress.finish()
+
+            if errors:
+                if len(errors) == 1:
+                    raise errors[0][1]
+                msg = f"{len(errors)} tasks failed:\n"
+                for name, err in errors:
+                    msg += f"  - {name}: {err}\n"
+                raise RuntimeError(msg)
+
+            return self._return_value
+        finally:
+            if not self._builtin_flags.get("_engine_preset"):
+                engine.shutdown()
+
+    def _run_filtered(self, pattern: str) -> Any:
+        """Execute only tasks matching ``pattern``; load their deps from the DB.
+
+        Semantics
+        ---------
+        1. **Match** — ``pattern`` is compiled as a regex and tested against
+           every top-level task's ``task_name`` *and* ``func.__name__``.
+           A task matches if either search succeeds.  Only top-level tasks
+           (those returned or captured by the flow body) are candidates;
+           transitive dependencies are never matched directly.
+        2. **Matched tasks** always execute fresh via ``engine.execute()``
+           — the database and in-memory caches are bypassed.
+        3. **Dependencies** of matched tasks are loaded from the database.
+           They are never re-executed.  If a dependency has no stored
+           result, a ``ValueError`` is raised telling the user to run the
+           full flow first.
+        4. **Everything else** (tasks that are neither matched nor a
+           dependency of a match) is ignored entirely.
+        5. **Error propagation** — if a dependency fails to load or a
+           matched task raises, every downstream task that transitively
+           depends on it is skipped.
+        """
+        engine = self._get_or_create_engine()
+        database = engine.database
+
+        if database is None:
+            raise ValueError(
+                "Filter mode requires a database for cached results"
+            )
+
+        tasks = self._tasks
+
+        # Build the full DAG
+        all_tasks: set[TaskExpression] = set(tasks)
+        for t in tasks:
+            all_tasks.update(t.get_all_dependencies())
+
+        dag = DAG.from_expressions(list(all_tasks))
+        ordered = dag.topological_sort()
+
+        regex = re.compile(pattern)
+        matched_hashes = {
+            t.hash
+            for t in tasks
+            if regex.search(t.task_name) or regex.search(t.func.__name__)
+        }
+
+        if not matched_hashes:
+            available = [t.task_name for t in tasks]
+            raise ValueError(
+                f"No tasks match pattern '{pattern}'. "
+                f"Available tasks: {available}"
+            )
+
+        # Collect all dependencies of matched tasks
+        required_dep_hashes: set[str] = set()
+
+        def collect_deps(task_hash: str) -> None:
+            for dep_hash in dag.get_dependencies(task_hash):
+                if dep_hash not in required_dep_hashes:
+                    required_dep_hashes.add(dep_hash)
+                    collect_deps(dep_hash)
+
+        for h in matched_hashes:
+            collect_deps(h)
+
+        tasks_to_process = [
+            e
+            for e in ordered
+            if e.hash in matched_hashes or e.hash in required_dep_hashes
+        ]
+
+        if _show_progress:
+            progress = ProgressBar(total=len(tasks_to_process))
+        else:
+            progress = SilentProgress(total=len(tasks_to_process))
+
+        try:
+            failed_hashes: set[str] = set()
+            errors: list[tuple[str, Exception]] = []
+
+            for expr in tasks_to_process:
+                deps = dag.get_dependencies(expr.hash)
+                if deps & failed_hashes:
+                    failed_hashes.add(expr.hash)
+                    progress.skip(expr.task_name)
+                    continue
+
                 if expr.is_evaluated:
                     progress.complete(expr.task_name, cached=True)
-                else:
+                elif expr.hash in matched_hashes:
                     progress.start(expr.task_name)
-                    was_cached = self._check_cached(engine, expr)
                     try:
-                        engine.evaluate(expr)
-                        progress.complete(expr.task_name, cached=was_cached)
+                        engine.execute(expr)
+                        progress.complete(expr.task_name, cached=False)
                     except Exception as e:
                         failed_hashes.add(expr.hash)
                         errors.append((expr.task_name, e))
                         progress.fail(expr.task_name)
+                else:
+                    # Dependency — load from cache
+                    progress.start(expr.task_name)
+                    cached = database.fetch_task_result(
+                        expr.hash, expr.task_name
+                    )
+                    if cached is None:
+                        failed_hashes.add(expr.hash)
+                        errors.append((
+                            expr.task_name,
+                            ValueError(
+                                f"No cached result for dependency "
+                                f"'{expr.task_name}'. Run the full flow "
+                                "first to populate the cache."
+                            ),
+                        ))
+                        progress.fail(expr.task_name)
+                    else:
+                        expr.set_result(cached.result)
+                        progress.complete(expr.task_name, cached=True)
 
             progress.finish()
 
@@ -214,7 +349,6 @@ class FlowResult:
         engine = ExecutionEngine(
             executor=executor,
             database=database,
-            use_cache=not self._builtin_flags["no_cache"],
         )
         set_engine(engine)
 
@@ -225,14 +359,6 @@ class FlowResult:
         )
 
         return engine
-
-    def _check_cached(self, engine: Any, expr: TaskExpression) -> bool:
-        if engine.database is not None and engine.use_cache:
-            cached = engine.database.fetch_task_result(
-                expr.hash, expr.task_name
-            )
-            return cached is not None
-        return False
 
     def __len__(self) -> int:
         return len(self._tasks)

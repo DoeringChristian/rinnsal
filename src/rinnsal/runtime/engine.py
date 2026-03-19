@@ -217,6 +217,37 @@ class ExecutionEngine:
             f"Task '{expr.task_name}' failed after {max_attempts} attempts"
         )
 
+    def execute(self, expr: TaskExpression) -> Any:
+        """Execute a single expression without checking any caches.
+
+        Always runs the task fresh through the executor pipeline,
+        stores the result in the database, and returns it.
+        """
+        # Resolve arguments
+        resolved_args, resolved_kwargs = self._resolve_args(expr)
+
+        # Execute the task (no cache check)
+        result, log = self._execute_with_retry(expr, resolved_args, resolved_kwargs)
+
+        # Store the result
+        expr.set_result(result)
+        self._evaluated[expr.hash] = result
+
+        # Persist to database
+        if self._database is not None:
+            entry = Entry(
+                result=result,
+                log=log,
+                metadata={
+                    "task_name": expr.task_name,
+                    "func_name": expr.func.__name__,
+                },
+                timestamp=datetime.now(),
+            )
+            self._database.store_task_result(expr.hash, entry, expr.task_name)
+
+        return result
+
     def clear_cache(self) -> None:
         """Clear the in-memory evaluation cache."""
         self._evaluated.clear()
@@ -239,7 +270,7 @@ _default_engine: ExecutionEngine | None = None
 def get_engine() -> ExecutionEngine:
     """Get or create the default execution engine.
 
-    Automatically parses CLI flags (-s, --no-cache, etc.) when creating
+    Automatically parses CLI flags (-s, etc.) when creating
     the default engine.
     """
     global _default_engine
@@ -254,7 +285,6 @@ def _create_default_engine() -> ExecutionEngine:
 
     # Parse known flags from sys.argv
     no_capture = "-s" in sys.argv or "--no-capture" in sys.argv
-    no_cache = "--no-cache" in sys.argv
 
     # Create executor with appropriate capture setting
     from rinnsal.execution.subprocess import SubprocessExecutor
@@ -267,7 +297,7 @@ def _create_default_engine() -> ExecutionEngine:
     database = get_database()
 
     return ExecutionEngine(
-        executor=executor, database=database, use_cache=not no_cache
+        executor=executor, database=database
     )
 
 

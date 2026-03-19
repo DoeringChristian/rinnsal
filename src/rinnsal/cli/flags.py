@@ -41,13 +41,6 @@ def add_builtin_flags(parser: argparse.ArgumentParser) -> None:
     )
 
     builtin_group.add_argument(
-        "--no-cache",
-        action="store_true",
-        default=False,
-        help="Disable result caching",
-    )
-
-    builtin_group.add_argument(
         "--db-path",
         type=str,
         default=".rinnsal",
@@ -59,13 +52,12 @@ def extract_builtin_flags(namespace: argparse.Namespace) -> dict[str, Any]:
     """Extract built-in flags from a parsed namespace.
 
     Returns:
-        Dictionary with keys: executor, filter, no_capture, no_cache, db_path
+        Dictionary with keys: executor, filter, no_capture, db_path
     """
     return {
         "executor": getattr(namespace, "executor", "subprocess"),
         "filter": getattr(namespace, "filter", None),
         "no_capture": getattr(namespace, "no_capture", False),
-        "no_cache": getattr(namespace, "no_cache", False),
         "db_path": getattr(namespace, "db_path", ".rinnsal"),
     }
 
@@ -75,5 +67,5 @@ def remove_builtin_flags(kwargs: dict[str, Any]) -> dict[str, Any]:
 
     Returns a new dict with only user-defined arguments.
     """
-    builtin_keys = {"executor", "filter", "no_capture", "no_cache", "db_path"}
+    builtin_keys = {"executor", "filter", "no_capture", "db_path"}
     return {k: v for k, v in kwargs.items() if k not in builtin_keys}
