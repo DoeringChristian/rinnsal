@@ -22,10 +22,9 @@ class FileDatabase(BaseDatabase):
     Directory structure:
         .rinnsal/
         ├── tasks/
-        │   └── <task_hash>/
-        │       ├── results/
-        │       │   └── <timestamp>.dat
-        │       └── latest.dat
+        │   └── <task_name>-<task_hash>/
+        │       └── results/
+        │           └── <timestamp>.dat
         ├── flows/
         │   └── <flow_name>/
         │       └── runs/
@@ -33,6 +32,10 @@ class FileDatabase(BaseDatabase):
         └── snapshots/
             └── <snapshot_hash>/
                 └── <files>
+
+    The latest result is discovered by sorting timestamped files, so
+    result files can be copied between task directories and the newest
+    one is always picked up.
     """
 
     def __init__(
@@ -91,9 +94,6 @@ class FileDatabase(BaseDatabase):
     def _task_results_dir(self, task_hash: str, task_name: str | None = None) -> Path:
         return self._task_dir(task_hash, task_name=task_name) / "results"
 
-    def _task_latest_path(self, task_hash: str, task_name: str | None = None) -> Path:
-        return self._task_dir(task_hash, task_name=task_name) / "latest.dat"
-
     def _flow_runs_dir(self, flow_name: str) -> Path:
         return self._flows_dir / flow_name / "runs"
 
@@ -117,29 +117,38 @@ class FileDatabase(BaseDatabase):
         entry_data = self._serialize_entry(entry)
 
         with file_lock(task_dir):
-            # Write result file
             self._serializer.save(entry_data, result_path)
-
-            # Update latest symlink or copy
-            latest_path = self._task_latest_path(task_hash, task_name=name)
-            self._serializer.save(entry_data, latest_path)
 
     def fetch_task_result(
         self,
         task_hash: str,
         task_name: str = "",
     ) -> Entry | None:
-        """Fetch the most recent result for a task."""
-        latest_path = self._task_latest_path(task_hash, task_name=task_name or None)
+        """Fetch the most recent result for a task.
 
-        if not latest_path.exists():
+        Discovers the latest result by sorting timestamped files in the
+        results/ directory.  This means results can be copied between
+        runs and the newest one is always picked up automatically.
+        """
+        results_dir = self._task_results_dir(task_hash, task_name=task_name or None)
+
+        if not results_dir.exists():
             return None
 
-        try:
-            entry_data = self._serializer.load(latest_path)
-            return self._deserialize_entry(entry_data)
-        except Exception:
-            return None
+        result_files = sorted(
+            results_dir.glob("*.dat"),
+            key=lambda p: p.stem,
+            reverse=True,
+        )
+
+        for path in result_files:
+            try:
+                entry_data = self._serializer.load(path)
+                return self._deserialize_entry(entry_data)
+            except Exception:
+                continue
+
+        return None
 
     def fetch_task_history(
         self,
@@ -177,7 +186,10 @@ class FileDatabase(BaseDatabase):
         task_name: str = "",
     ) -> bool:
         """Check if a task result exists."""
-        return self._task_latest_path(task_hash, task_name=task_name or None).exists()
+        results_dir = self._task_results_dir(task_hash, task_name=task_name or None)
+        if not results_dir.exists():
+            return False
+        return any(results_dir.glob("*.dat"))
 
     def store_flow_run(
         self,

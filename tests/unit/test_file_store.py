@@ -143,4 +143,5 @@ class TestFileDatabase:
 
         task_dir = file_db.root / "tasks" / "load_data-abc123"
         assert task_dir.exists()
-        assert (task_dir / "latest.dat").exists()
+        assert (task_dir / "results").exists()
+        assert any((task_dir / "results").glob("*.dat"))
