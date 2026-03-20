@@ -24,6 +24,15 @@ def to_dict(obj: Any) -> Any:
     return obj
 
 
+def _wrap(value: Any) -> Any:
+    """Recursively wrap dicts as Config objects."""
+    if isinstance(value, dict) and not isinstance(value, Config):
+        return Config(value)
+    if isinstance(value, list):
+        return [_wrap(v) for v in value]
+    return value
+
+
 @dataclass
 class Config:
     """A dictionary wrapper for task configuration.
@@ -37,10 +46,11 @@ class Config:
         self, _dict: dict[str, Any] | None = None, **kwargs: Any
     ) -> None:
         if _dict is not None:
-            self._data = dict(_dict)
+            self._data = {k: _wrap(v) for k, v in _dict.items()}
         else:
             self._data = {}
-        self._data.update(kwargs)
+        for k, v in kwargs.items():
+            self._data[k] = _wrap(v)
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
@@ -61,13 +71,13 @@ class Config:
                 f"Use config['{name}'] instead."
             )
         else:
-            self._data[name] = value
+            self._data[name] = _wrap(value)
 
     def __getitem__(self, key: str) -> Any:
         return self._data[key]
 
     def __setitem__(self, key: str, value: Any) -> None:
-        self._data[key] = value
+        self._data[key] = _wrap(value)
 
     def __contains__(self, key: str) -> bool:
         return key in self._data

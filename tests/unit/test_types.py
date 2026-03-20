@@ -71,7 +71,37 @@ class TestConfig:
 
     def test_to_dict(self):
         config = Config({"a": 1, "b": 2})
-        assert config.to_dict() == {"a": 1, "b": 2}
+        d = config.to_dict()
+        assert d["a"] == 1
+        assert d["b"] == 2
+
+    def test_nested_dict_becomes_config(self):
+        config = Config({"model": {"type": "resnet", "layers": 50}})
+        assert isinstance(config.model, Config)
+        assert config.model.type == "resnet"
+        assert config.model.layers == 50
+
+    def test_deeply_nested_dict(self):
+        config = Config({"a": {"b": {"c": 42}}})
+        assert config.a.b.c == 42
+
+    def test_nested_dict_via_setattr(self):
+        config = Config()
+        config.model = {"type": "vgg"}
+        assert isinstance(config.model, Config)
+        assert config.model.type == "vgg"
+
+    def test_nested_dict_via_setitem(self):
+        config = Config()
+        config["model"] = {"type": "vgg"}
+        assert isinstance(config["model"], Config)
+        assert config["model"].type == "vgg"
+
+    def test_list_of_dicts_wrapped(self):
+        config = Config(layers=[{"size": 128}, {"size": 256}])
+        assert isinstance(config.layers[0], Config)
+        assert config.layers[0].size == 128
+        assert config.layers[1].size == 256
 
     def test_save_and_load_roundtrip(self, tmp_path):
         config = Config(lr=0.01, epochs=10, model="resnet")
@@ -107,7 +137,9 @@ class TestConfig:
 
         config = Config.load(path)
         assert config.lr == 0.01
-        assert config.model == {"layers": 3, "hidden": 128}
+        assert isinstance(config.model, Config)
+        assert config.model.layers == 3
+        assert config.model.hidden == 128
 
     def test_load_empty_file_returns_empty_config(self, tmp_path):
         path = tmp_path / "empty.yaml"
@@ -133,7 +165,9 @@ class TestConfig:
 
         loaded = Config.load(path)
         assert loaded.lr == 0.01
-        assert loaded.model == {"layers": 3, "hidden": 128}
+        assert isinstance(loaded.model, Config)
+        assert loaded.model.layers == 3
+        assert loaded.model.hidden == 128
 
     def test_reserved_name_attr_raises(self):
         config = Config()
