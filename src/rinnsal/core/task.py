@@ -8,7 +8,6 @@ from typing import Any, Callable, ParamSpec, TypeVar, overload
 from rinnsal.core.expression import TaskExpression
 from rinnsal.core.hashing import compute_task_hash
 from rinnsal.core.registry import get_registry
-from rinnsal.core.types import Entry, Runs
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -126,52 +125,3 @@ def task(
     return decorator
 
 
-class Task:
-    """A handle to a specific task execution.
-
-    Provides access to the task's result history, runs, and snapshot.
-    This is a higher-level interface built on top of TaskExpression.
-    """
-
-    def __init__(self, expression: TaskExpression) -> None:
-        self._expression = expression
-        self._runs: Runs[Entry] | None = None
-
-    @property
-    def name(self) -> str:
-        return self._expression.task_name
-
-    @property
-    def hash(self) -> str:
-        return self._expression.hash
-
-    @property
-    def result(self) -> Any:
-        return self._expression.result
-
-    @property
-    def is_evaluated(self) -> bool:
-        return self._expression.is_evaluated
-
-    @property
-    def runs(self) -> Runs[Entry]:
-        """Access the history of all executions for this task."""
-        if self._runs is None:
-            # TODO: Load from database
-            self._runs = Runs()
-        return self._runs
-
-    @property
-    def snapshot(self) -> Any:
-        """Get the code snapshot from the most recent run, if available."""
-        if self._runs and self._runs.latest:
-            return self._runs.latest.snapshot
-        return None
-
-    def eval(self) -> Any:
-        """Evaluate this task and return its result."""
-        return self._expression.eval()
-
-    def __repr__(self) -> str:
-        status = "evaluated" if self.is_evaluated else "pending"
-        return f"Task({self.name}, {status})"

@@ -86,8 +86,32 @@ class Config(dict):
             return dict.__eq__(self, other)
         return False
 
-    def __hash__(self) -> int:
-        return hash(tuple(sorted(self.items())))
+    __hash__ = None  # mutable dict — hashing is semantically wrong
+
+    def update(self, _m=(), **kwargs):
+        if hasattr(_m, 'items'):
+            for k, v in _m.items():
+                self[k] = v
+        else:
+            for k, v in _m:
+                self[k] = v
+        for k, v in kwargs.items():
+            self[k] = v
+
+    def setdefault(self, key, default=None):
+        if key not in self:
+            self[key] = default
+        return self[key]
+
+    def __ior__(self, other):
+        self.update(other)
+        return self
+
+    def copy(self):
+        return Config(dict(self))
+
+    def __copy__(self):
+        return self.copy()
 
     def to_dict(self) -> dict[str, Any]:
         """Recursively convert to plain dicts."""

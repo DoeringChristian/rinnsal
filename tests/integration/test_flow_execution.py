@@ -430,6 +430,39 @@ class TestFailedTaskOutput:
         assert "attempt 2" in captured.err
 
 
+class TestDryRun:
+    """Tests for --dry-run flag."""
+
+    def test_dry_run_prints_tasks_without_executing(self, engine, capsys):
+        call_log = []
+
+        @task
+        def source():
+            call_log.append("source")
+            return 10
+
+        @task
+        def double(x):
+            call_log.append("double")
+            return x * 2
+
+        @flow
+        def my_flow():
+            s = source()
+            d = double(s)
+            return [s, d]
+
+        fr = my_flow()
+        fr._builtin_flags["dry_run"] = True
+        fr.run()
+
+        assert call_log == []  # nothing executed
+        captured = capsys.readouterr()
+        assert "source" in captured.out
+        assert "double" in captured.out
+        assert "double <- source" in captured.out
+
+
 class TestTaskEval:
     """Tests for task.eval() method."""
 

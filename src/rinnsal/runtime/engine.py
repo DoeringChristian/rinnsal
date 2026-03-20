@@ -33,12 +33,10 @@ class ExecutionEngine:
         self,
         executor: Executor | None = None,
         database: Database | None = None,
-        use_cache: bool = True,
         logger: Logger | None = None,
     ) -> None:
         self._executor = executor or InlineExecutor()
         self._database = database
-        self._use_cache = use_cache
         self._logger = logger
         self._evaluated: dict[str, Any] = {}
 
@@ -49,10 +47,6 @@ class ExecutionEngine:
     @property
     def database(self) -> Database | None:
         return self._database
-
-    @property
-    def use_cache(self) -> bool:
-        return self._use_cache
 
     @property
     def logger(self) -> Logger | None:
@@ -87,14 +81,6 @@ class ExecutionEngine:
             if expr.is_evaluated:
                 self._evaluated[expr.hash] = expr.result
                 continue
-
-            # Check cache first
-            if self._use_cache and self._database is not None:
-                cached_entry = self._database.fetch_task_result(expr.hash, expr.task_name)
-                if cached_entry is not None:
-                    expr.set_result(cached_entry.result)
-                    self._evaluated[expr.hash] = cached_entry.result
-                    continue
 
             # Resolve arguments
             resolved_args, resolved_kwargs = self._resolve_args(expr)
@@ -223,37 +209,6 @@ class ExecutionEngine:
             f"Task '{expr.task_name}' failed after {max_attempts} attempts"
         )
 
-    def execute(self, expr: TaskExpression) -> Any:
-        """Execute a single expression without checking any caches.
-
-        Always runs the task fresh through the executor pipeline,
-        stores the result in the database, and returns it.
-        """
-        # Resolve arguments
-        resolved_args, resolved_kwargs = self._resolve_args(expr)
-
-        # Execute the task (no cache check)
-        result, log = self._execute_with_retry(expr, resolved_args, resolved_kwargs)
-
-        # Store the result
-        expr.set_result(result)
-        self._evaluated[expr.hash] = result
-
-        # Persist to database
-        if self._database is not None:
-            entry = Entry(
-                result=result,
-                log=log,
-                metadata={
-                    "task_name": expr.task_name,
-                    "func_name": expr.func.__name__,
-                },
-                timestamp=datetime.now(),
-            )
-            self._database.store_task_result(expr.hash, entry, expr.task_name)
-
-        return result
-
     def clear_cache(self) -> None:
         """Clear the in-memory evaluation cache."""
         self._evaluated.clear()
@@ -287,24 +242,28 @@ def get_engine() -> ExecutionEngine:
 
 def _create_default_engine() -> ExecutionEngine:
     """Create the default engine with CLI flag support."""
-    import sys
+    import argparse
 
-    # Parse known flags from sys.argv
-    no_capture = "-s" in sys.argv or "--no-capture" in sys.argv
+    from rinnsal.cli.flags import add_builtin_flags, extract_builtin_flags
 
-    # Create executor with appropriate capture setting
-    from rinnsal.execution.subprocess import SubprocessExecutor
+    parser = argparse.ArgumentParser(add_help=False)
+    add_builtin_flags(parser)
+    flags, _ = parser.parse_known_args()
+    builtin = extract_builtin_flags(flags)
 
-    executor = SubprocessExecutor(capture=not no_capture)
+    # Create executor
+    from rinnsal.core.flow import _create_executor
 
-    # Use the default file database for persistence
-    from rinnsal.persistence.file_store import get_database
-
-    database = get_database()
-
-    return ExecutionEngine(
-        executor=executor, database=database
+    executor = _create_executor(
+        builtin["executor"], capture=not builtin["no_capture"]
     )
+
+    # Create database
+    from rinnsal.persistence.file_store import FileDatabase
+
+    database = FileDatabase(root=builtin["db_path"])
+
+    return ExecutionEngine(executor=executor, database=database)
 
 
 def set_engine(engine: ExecutionEngine) -> None:

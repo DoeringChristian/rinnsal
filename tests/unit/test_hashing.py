@@ -3,7 +3,6 @@
 import pytest
 
 from rinnsal.core.hashing import (
-    ContentHasher,
     compute_task_hash,
     hash_args,
     hash_function,
@@ -140,37 +139,3 @@ class TestComputeTaskHash:
         assert h1 != h2
 
 
-class TestContentHasher:
-    """Tests for the ContentHasher class."""
-
-    def test_function_caching(self):
-        hasher = ContentHasher()
-
-        def my_func():
-            return 42
-
-        h1 = hasher.hash_function(my_func)
-        h2 = hasher.hash_function(my_func)
-        assert h1 == h2
-
-    def test_hash_task(self):
-        hasher = ContentHasher()
-
-        def my_func(x):
-            return x * 2
-
-        h1 = hasher.hash_task(my_func, (10,), {})
-        h2 = hasher.hash_task(my_func, (10,), {})
-        assert h1 == h2
-
-    def test_clear_cache(self):
-        hasher = ContentHasher()
-
-        def my_func():
-            return 42
-
-        hasher.hash_function(my_func)
-        assert len(hasher._func_cache) > 0
-
-        hasher.clear_cache()
-        assert len(hasher._func_cache) == 0

@@ -2,7 +2,7 @@
 
 import pytest
 
-from rinnsal.core.task import Task, TaskDef, task
+from rinnsal.core.task import TaskDef, task
 from rinnsal.core.expression import TaskExpression
 
 
@@ -114,45 +114,3 @@ class TestTaskDef:
         assert task_def.__doc__ == "My docstring."
 
 
-class TestTask:
-    """Tests for the Task class."""
-
-    def test_name_from_expression(self):
-        @task
-        def my_func():
-            return 42
-
-        expr = my_func()
-        t = Task(expr)
-        assert t.name == "my_func"
-
-    def test_hash_from_expression(self):
-        @task
-        def my_func():
-            return 42
-
-        expr = my_func()
-        t = Task(expr)
-        assert t.hash == expr.hash
-
-    def test_is_evaluated(self):
-        @task
-        def my_func():
-            return 42
-
-        expr = my_func()
-        t = Task(expr)
-
-        assert not t.is_evaluated
-
-        expr.set_result(42)
-        assert t.is_evaluated
-
-    def test_runs_initially_empty(self):
-        @task
-        def my_func():
-            return 42
-
-        expr = my_func()
-        t = Task(expr)
-        assert len(t.runs) == 0

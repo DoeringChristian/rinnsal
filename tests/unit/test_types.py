@@ -64,10 +64,10 @@ class TestConfig:
         assert config1 == config2
         assert config1 != config3
 
-    def test_hash(self):
-        config1 = Config({"a": 1})
-        config2 = Config({"a": 1})
-        assert hash(config1) == hash(config2)
+    def test_unhashable(self):
+        config = Config({"a": 1})
+        with pytest.raises(TypeError):
+            hash(config)
 
     def test_to_dict(self):
         config = Config({"a": 1, "b": 2})
@@ -189,6 +189,54 @@ class TestConfig:
         assert isinstance(config, dict)
         assert config["type"] == "MyModel"
         assert "type" in config
+
+    def test_update_wraps_nested_dicts(self):
+        config = Config({"a": 1})
+        config.update({"b": {"c": 2}})
+        assert isinstance(config.b, Config)
+        assert config.b.c == 2
+
+    def test_update_with_kwargs(self):
+        config = Config()
+        config.update(x={"y": 1})
+        assert isinstance(config.x, Config)
+        assert config.x.y == 1
+
+    def test_update_with_iterable(self):
+        config = Config()
+        config.update([("a", {"b": 1})])
+        assert isinstance(config.a, Config)
+        assert config.a.b == 1
+
+    def test_setdefault_wraps_nested_dict(self):
+        config = Config()
+        config.setdefault("x", {"y": 1})
+        assert isinstance(config.x, Config)
+        assert config.x.y == 1
+
+    def test_setdefault_does_not_overwrite(self):
+        config = Config(x=10)
+        config.setdefault("x", 99)
+        assert config.x == 10
+
+    def test_ior_wraps_nested_dicts(self):
+        config = Config(a=1)
+        config |= {"b": {"c": 2}}
+        assert isinstance(config.b, Config)
+        assert config.b.c == 2
+
+    def test_copy_returns_config(self):
+        config = Config({"a": {"b": 1}})
+        copied = config.copy()
+        assert isinstance(copied, Config)
+        assert isinstance(copied.a, Config)
+        assert copied.a.b == 1
+
+    def test_config_with_list_values(self):
+        """Config with list values doesn't crash (regression for removed __hash__)."""
+        config = Config({"a": [1, 2, 3], "b": {"c": [4, 5]}})
+        assert config.a == [1, 2, 3]
+        assert config.b.c == [4, 5]
 
 
 class TestEntry:

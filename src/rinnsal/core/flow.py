@@ -11,8 +11,6 @@ from contextvars import ContextVar
 
 from rinnsal.core.expression import TaskExpression
 from rinnsal.core.graph import DAG
-from rinnsal.core.types import Entry, Runs
-from rinnsal.runtime.engine import get_engine
 from rinnsal.progress.bar import ProgressBar, SilentProgress
 
 # Context variable for capturing tasks created during flow execution
@@ -36,11 +34,6 @@ def set_progress(enabled: bool) -> None:
     """Enable or disable progress bar display."""
     global _show_progress
     _show_progress = enabled
-
-
-def get_progress() -> bool:
-    """Check if progress display is enabled."""
-    return _show_progress
 
 
 P = ParamSpec("P")
@@ -103,7 +96,7 @@ class FlowResult:
         """Execute tasks and return the original structure.
 
         Without ``--filter``, every task executes fresh via
-        ``engine.execute()``.
+        ``engine.evaluate()``.
 
         With ``--filter PATTERN``, only matched tasks execute fresh;
         their dependencies are loaded from the database:
@@ -127,6 +120,27 @@ class FlowResult:
 
         dag = DAG.from_expressions(self._tasks)
         ordered = dag.topological_sort()
+
+        # --dry-run: print DAG and return without executing
+        if self._builtin_flags.get("dry_run"):
+            import sys
+
+            sys.stdout.write(f"Flow: {self._flow_name}\n")
+            sys.stdout.write(f"Tasks ({len(ordered)}):\n")
+            for expr in ordered:
+                deps = dag.get_dependencies(expr.hash)
+                dep_names = [
+                    e.task_name
+                    for e in ordered
+                    if e.hash in deps
+                ]
+                if dep_names:
+                    sys.stdout.write(
+                        f"  {expr.task_name} <- {', '.join(dep_names)}\n"
+                    )
+                else:
+                    sys.stdout.write(f"  {expr.task_name}\n")
+            return self._return_value
 
         engine = self._get_or_create_engine()
         database = engine.database
@@ -178,6 +192,17 @@ class FlowResult:
         else:
             progress = SilentProgress(total=len(ordered))
 
+        import time as _time
+
+        t_start = _time.monotonic()
+        n_passed = 0
+        n_cached = 0
+        n_failed = 0
+
+        # Evict matched tasks from in-memory cache so they execute fresh
+        for h in matched_hashes:
+            engine._evaluated.pop(h, None)
+
         try:
             failed_hashes: set[str] = set()
             errors: list[tuple[str, Exception]] = []
@@ -187,20 +212,24 @@ class FlowResult:
                 if deps & failed_hashes:
                     failed_hashes.add(expr.hash)
                     progress.skip(expr.task_name)
+                    n_failed += 1
                     continue
 
                 if expr.hash in matched_hashes:
                     # Matched (or no filter) — execute fresh
                     progress.start(expr.task_name)
                     try:
-                        engine.execute(expr)
+                        engine.evaluate(expr)
                         progress.complete(expr.task_name, cached=False)
+                        n_passed += 1
                     except Exception as e:
                         failed_hashes.add(expr.hash)
                         errors.append((expr.task_name, e))
                         progress.fail(expr.task_name)
+                        n_failed += 1
                 elif expr.is_evaluated:
                     progress.complete(expr.task_name, cached=True)
+                    n_cached += 1
                 else:
                     # Dependency of a matched task — load from cache
                     progress.start(expr.task_name)
@@ -220,11 +249,28 @@ class FlowResult:
                             )
                         )
                         progress.fail(expr.task_name)
+                        n_failed += 1
                     else:
                         expr.set_result(cached.result)
                         progress.complete(expr.task_name, cached=True)
+                        n_cached += 1
 
             progress.finish()
+
+            elapsed = _time.monotonic() - t_start
+            import sys
+
+            sys.stdout.write(
+                f"{n_passed} passed, {n_cached} cached, "
+                f"{n_failed} failed in {elapsed:.1f}s\n"
+            )
+
+            # Record flow run
+            if database is not None:
+                database.store_flow_run(
+                    self._flow_name,
+                    [e.hash for e in ordered],
+                )
 
             if errors:
                 if len(errors) == 1:

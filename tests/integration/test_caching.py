@@ -10,8 +10,8 @@ from rinnsal.runtime.engine import ExecutionEngine
 from rinnsal.execution.inline import InlineExecutor
 
 
-class TestCachingWithInMemoryDatabase:
-    """Tests for caching with InMemoryDatabase."""
+class TestInMemoryDeduplication:
+    """Tests for within-run deduplication via _evaluated dict."""
 
     @pytest.fixture
     def engine(self):
@@ -28,7 +28,8 @@ class TestCachingWithInMemoryDatabase:
         yield
         registry.clear()
 
-    def test_cache_hit(self, engine):
+    def test_same_expression_deduped_within_run(self, engine):
+        """Within a single run, same hash is evaluated once."""
         call_count = 0
 
         @task
@@ -37,31 +38,18 @@ class TestCachingWithInMemoryDatabase:
             call_count += 1
             return call_count
 
-        # First call
-        expr1 = counter()
-        result1 = engine.evaluate(expr1)
-        assert result1 == 1
+        expr = counter()
+        result = engine.evaluate(expr)
+        assert result == 1
         assert call_count == 1
 
-        # Clear engine cache but keep database
-        engine.clear_cache()
-
-        # Second call - different expression object but same hash
-        @task
-        def counter():
-            nonlocal call_count
-            call_count += 1
-            return call_count
-
-        expr2 = counter()
-        result2 = engine.evaluate(expr2)
-
-        # Should use cached result
+        # Same expression again (still in _evaluated)
+        result2 = engine.evaluate(expr)
         assert result2 == 1
-        assert call_count == 1  # Not incremented
+        assert call_count == 1  # Not re-executed
 
-    def test_cache_disabled(self):
-        """Test that use_cache=False ignores database cache."""
+    def test_fresh_execution_after_clear_cache(self, engine):
+        """After clear_cache(), tasks execute fresh."""
         call_count = 0
 
         @task
@@ -70,49 +58,28 @@ class TestCachingWithInMemoryDatabase:
             call_count += 1
             return x * 2
 
-        # Create engine with caching disabled
-        db = InMemoryDatabase()
-        no_cache_engine = ExecutionEngine(
-            executor=InlineExecutor(),
-            database=db,
-            use_cache=False,
-        )
-
-        # First call with x=1
-        expr1 = compute(1)
-        result1 = no_cache_engine.evaluate(expr1)
+        expr = compute(1)
+        result1 = engine.evaluate(expr)
         assert result1 == 2
         assert call_count == 1
 
-        # Manually store a different result in the database for the same hash
-        from rinnsal.core.types import Entry
-
-        db.store_task_result(expr1.hash, Entry(result=999), expr1.task_name)
-
-        # Clear engine's in-memory cache
-        no_cache_engine.clear_cache()
+        engine.clear_cache()
         get_registry().clear()
 
-        # Redefine to get fresh expression with same hash
         @task
         def compute(x):
             nonlocal call_count
             call_count += 1
             return x * 2
 
-        # Second call - even though DB has result, should execute because use_cache=False
         expr2 = compute(1)
-        result2 = no_cache_engine.evaluate(expr2)
-
-        # Should execute again (not using database cache)
+        result2 = engine.evaluate(expr2)
         assert result2 == 2
-        assert call_count == 2
-
-        no_cache_engine.shutdown()
+        assert call_count == 2  # Executed again
 
 
-class TestCachingWithFileDatabase:
-    """Tests for caching with FileDatabase."""
+class TestPersistence:
+    """Tests for database persistence (store, not cache-on-read)."""
 
     @pytest.fixture
     def db(self, tmp_path):
@@ -132,53 +99,31 @@ class TestCachingWithFileDatabase:
         yield
         registry.clear()
 
-    def test_cache_persists(self, db, tmp_path):
-        call_count = 0
+    def test_results_persisted_to_database(self, db):
+        """Results are stored in the database after execution."""
 
         @task
-        def counter():
-            nonlocal call_count
-            call_count += 1
-            return call_count
+        def source():
+            return 42
 
-        # First engine
-        engine1 = ExecutionEngine(
+        engine = ExecutionEngine(
             executor=InlineExecutor(),
             database=db,
         )
 
-        expr = counter()
-        result1 = engine1.evaluate(expr)
-        assert result1 == 1
-        engine1.shutdown()
+        expr = source()
+        engine.evaluate(expr)
 
-        # Create new engine with same database path
-        db2 = FileDatabase(root=tmp_path / ".rinnsal")
-        engine2 = ExecutionEngine(
-            executor=InlineExecutor(),
-            database=db2,
-        )
+        # Result should be in the database
+        entry = db.fetch_task_result(expr.hash, expr.task_name)
+        assert entry is not None
+        assert entry.result == 42
 
-        # Clear global registry
-        get_registry().clear()
-
-        @task
-        def counter():
-            nonlocal call_count
-            call_count += 1
-            return call_count
-
-        expr2 = counter()
-        result2 = engine2.evaluate(expr2)
-
-        # Should use cached result from disk
-        assert result2 == 1
-        assert call_count == 1
-        engine2.shutdown()
+        engine.shutdown()
 
 
-class TestCachingWithDependencies:
-    """Tests for caching with task dependencies."""
+class TestDependencyDeduplication:
+    """Tests for deduplication with dependencies within a run."""
 
     @pytest.fixture(autouse=True)
     def clean_registry(self):
@@ -187,7 +132,7 @@ class TestCachingWithDependencies:
         yield
         registry.clear()
 
-    def test_downstream_uses_cached_upstream(self):
+    def test_shared_dependency_runs_once(self):
         db = InMemoryDatabase()
         call_counts = {"source": 0, "double": 0}
 
@@ -206,31 +151,9 @@ class TestCachingWithDependencies:
             database=db,
         )
 
-        # First run
         result = engine.evaluate(double(source()))
         assert result == 20
         assert call_counts["source"] == 1
         assert call_counts["double"] == 1
-
-        # Clear engine cache
-        engine.clear_cache()
-        get_registry().clear()
-
-        # Redefine tasks
-        @task
-        def source():
-            call_counts["source"] += 1
-            return 10
-
-        @task
-        def double(x):
-            call_counts["double"] += 1
-            return x * 2
-
-        # Second run - both should be cached
-        result = engine.evaluate(double(source()))
-        assert result == 20
-        assert call_counts["source"] == 1  # Not incremented
-        assert call_counts["double"] == 1  # Not incremented
 
         engine.shutdown()

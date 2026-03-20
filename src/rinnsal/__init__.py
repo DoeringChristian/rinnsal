@@ -1,8 +1,8 @@
 """Rinnsal: A declarative DAG execution framework for Python."""
 
 from rinnsal.core.task import task
-from rinnsal.core.flow import flow, set_progress
-from rinnsal.core.types import Config, TaskRuns, to_dict
+from rinnsal.core.flow import flow, FlowResult, set_progress
+from rinnsal.core.types import Config, Entry, TaskRuns, to_dict
 from rinnsal.core.registry_build import register, build
 from rinnsal.runtime.engine import eval
 from rinnsal.logger import Logger, LogReader
@@ -10,8 +10,10 @@ from rinnsal.logger import Logger, LogReader
 __all__ = [
     "task",
     "flow",
+    "FlowResult",
     "eval",
     "Config",
+    "Entry",
     "TaskRuns",
     "to_dict",
     "register",
