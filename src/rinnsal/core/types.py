@@ -14,7 +14,7 @@ import yaml
 def to_dict(obj: Any) -> Any:
     """Recursively convert Config objects to dicts."""
     if isinstance(obj, Config):
-        return {k: to_dict(v) for k, v in obj._data.items()}
+        return {k: to_dict(v) for k, v in obj.items()}
     elif isinstance(obj, dict):
         return {k: to_dict(v) for k, v in obj.items()}
     elif isinstance(obj, list):
@@ -33,34 +33,34 @@ def _wrap(value: Any) -> Any:
     return value
 
 
-@dataclass
-class Config:
-    """A dictionary wrapper for task configuration.
+class Config(dict):
+    """A dict subclass with attribute-style access.
 
-    Provides attribute-style access to configuration values.
+    Nested dicts are automatically wrapped as Config objects so that
+    ``config.model.type`` works at any depth.  Because Config *is* a
+    dict, it passes ``isinstance(cfg, dict)`` checks everywhere
+    (e.g. ``build()``).
     """
 
-    _data: dict[str, Any] = field(default_factory=dict)
+    _RESERVED = frozenset(("save", "load", "get", "items", "keys", "values", "to_dict"))
 
     def __init__(
         self, _dict: dict[str, Any] | None = None, **kwargs: Any
     ) -> None:
+        super().__init__()
         if _dict is not None:
-            self._data = {k: _wrap(v) for k, v in _dict.items()}
-        else:
-            self._data = {}
+            for k, v in _dict.items():
+                self[k] = v
         for k, v in kwargs.items():
-            self._data[k] = _wrap(v)
+            self[k] = v
 
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
             raise AttributeError(name)
         try:
-            return self._data[name]
+            return self[name]
         except KeyError:
             raise AttributeError(f"Config has no attribute '{name}'") from None
-
-    _RESERVED = frozenset(("save", "load", "get", "items", "keys", "values", "to_dict"))
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name.startswith("_"):
@@ -71,22 +71,10 @@ class Config:
                 f"Use config['{name}'] instead."
             )
         else:
-            self._data[name] = _wrap(value)
-
-    def __getitem__(self, key: str) -> Any:
-        return self._data[key]
+            self[name] = value
 
     def __setitem__(self, key: str, value: Any) -> None:
-        self._data[key] = _wrap(value)
-
-    def __contains__(self, key: str) -> bool:
-        return key in self._data
-
-    def __iter__(self) -> Iterator[str]:
-        return iter(self._data)
-
-    def __len__(self) -> int:
-        return len(self._data)
+        super().__setitem__(key, _wrap(value))
 
     def __repr__(self) -> str:
         return yaml.dump(
@@ -95,26 +83,15 @@ class Config:
 
     def __eq__(self, other: object) -> bool:
         if isinstance(other, Config):
-            return self._data == other._data
+            return dict.__eq__(self, other)
         return False
 
     def __hash__(self) -> int:
-        return hash(tuple(sorted(self._data.items())))
-
-    def get(self, key: str, default: Any = None) -> Any:
-        return self._data.get(key, default)
-
-    def items(self) -> Any:
-        return self._data.items()
-
-    def keys(self) -> Any:
-        return self._data.keys()
-
-    def values(self) -> Any:
-        return self._data.values()
+        return hash(tuple(sorted(self.items())))
 
     def to_dict(self) -> dict[str, Any]:
-        return dict(self._data)
+        """Recursively convert to plain dicts."""
+        return to_dict(self)
 
     def save(self, path: str | Path) -> None:
         """Save config to a YAML file."""

@@ -179,6 +179,17 @@ class TestConfig:
         config["save"] = "ok"
         assert config["save"] == "ok"
 
+    def test_is_dict_subclass(self):
+        config = Config(a=1)
+        assert isinstance(config, dict)
+
+    def test_works_with_isinstance_dict_check(self):
+        """Config passes isinstance(cfg, dict) so build() etc. work."""
+        config = Config(type="MyModel", size=20)
+        assert isinstance(config, dict)
+        assert config["type"] == "MyModel"
+        assert "type" in config
+
 
 class TestEntry:
     """Tests for the Entry class."""

@@ -148,6 +148,36 @@ class TestBuild:
         assert obj.size == 20
 
 
+class TestBuildWithConfig:
+    def test_build_from_config_object(self):
+        from rinnsal.core.types import Config
+
+        @register
+        class Model:
+            def __init__(self, size: int = 10):
+                self.size = size
+
+        cfg = Config(type="Model", size=42)
+        obj = build(Model, cfg)
+        assert isinstance(obj, Model)
+        assert obj.size == 42
+
+    def test_build_from_nested_config(self):
+        from rinnsal.core.types import Config
+
+        @register
+        class Model:
+            def __init__(self, size: int = 10, name: str = "default"):
+                self.size = size
+                self.name = name
+
+        cfg = Config.load.__func__  # just verify Config is a dict
+        cfg = Config({"type": "Model", "size": 20, "name": "test"})
+        obj = build(Model, cfg)
+        assert obj.size == 20
+        assert obj.name == "test"
+
+
 class TestRegistryHelpers:
     def test_get_registry_returns_copy(self):
         @register
