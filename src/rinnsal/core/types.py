@@ -50,9 +50,16 @@ class Config:
         except KeyError:
             raise AttributeError(f"Config has no attribute '{name}'") from None
 
+    _RESERVED = frozenset(("save", "load", "get", "items", "keys", "values", "to_dict"))
+
     def __setattr__(self, name: str, value: Any) -> None:
         if name.startswith("_"):
             object.__setattr__(self, name, value)
+        elif name in self._RESERVED:
+            raise AttributeError(
+                f"'{name}' is a reserved Config method and cannot be used as a key. "
+                f"Use config['{name}'] instead."
+            )
         else:
             self._data[name] = value
 
@@ -98,6 +105,24 @@ class Config:
 
     def to_dict(self) -> dict[str, Any]:
         return dict(self._data)
+
+    def save(self, path: str | Path) -> None:
+        """Save config to a YAML file."""
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "w") as f:
+            yaml.dump(to_dict(self), f, default_flow_style=False, sort_keys=False)
+
+    @classmethod
+    def load(cls, path: str | Path) -> Config:
+        """Load config from a YAML file."""
+        with open(path) as f:
+            data = yaml.safe_load(f)
+        if data is None:
+            return cls()
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected a YAML mapping, got {type(data).__name__}")
+        return cls(data)
 
 
 @dataclass

@@ -2,6 +2,7 @@
 
 import pytest
 from datetime import datetime
+from pathlib import Path
 
 from rinnsal.core.types import Config, Entry, Runs, Snapshot
 
@@ -71,6 +72,78 @@ class TestConfig:
     def test_to_dict(self):
         config = Config({"a": 1, "b": 2})
         assert config.to_dict() == {"a": 1, "b": 2}
+
+    def test_save_and_load_roundtrip(self, tmp_path):
+        config = Config(lr=0.01, epochs=10, model="resnet")
+        path = tmp_path / "config.yaml"
+        config.save(path)
+
+        loaded = Config.load(path)
+        assert loaded == config
+
+    def test_save_creates_parent_dirs(self, tmp_path):
+        config = Config(x=1)
+        path = tmp_path / "nested" / "dir" / "config.yaml"
+        config.save(path)
+        assert path.exists()
+
+    def test_save_produces_valid_yaml(self, tmp_path):
+        import yaml
+
+        config = Config(a=1, b=[1, 2, 3], c="hello")
+        path = tmp_path / "config.yaml"
+        config.save(path)
+
+        with open(path) as f:
+            data = yaml.safe_load(f)
+        assert data == {"a": 1, "b": [1, 2, 3], "c": "hello"}
+
+    def test_load_nested_config(self, tmp_path):
+        import yaml
+
+        path = tmp_path / "config.yaml"
+        with open(path, "w") as f:
+            yaml.dump({"model": {"layers": 3, "hidden": 128}, "lr": 0.01}, f)
+
+        config = Config.load(path)
+        assert config.lr == 0.01
+        assert config.model == {"layers": 3, "hidden": 128}
+
+    def test_load_empty_file_returns_empty_config(self, tmp_path):
+        path = tmp_path / "empty.yaml"
+        path.write_text("")
+        config = Config.load(path)
+        assert len(config) == 0
+
+    def test_load_non_mapping_raises(self, tmp_path):
+        path = tmp_path / "bad.yaml"
+        path.write_text("- a\n- b\n")
+        with pytest.raises(ValueError, match="YAML mapping"):
+            Config.load(path)
+
+    def test_load_missing_file_raises(self, tmp_path):
+        with pytest.raises(FileNotFoundError):
+            Config.load(tmp_path / "nope.yaml")
+
+    def test_save_load_with_nested_config(self, tmp_path):
+        inner = Config(layers=3, hidden=128)
+        config = Config(model=inner, lr=0.01)
+        path = tmp_path / "config.yaml"
+        config.save(path)
+
+        loaded = Config.load(path)
+        assert loaded.lr == 0.01
+        assert loaded.model == {"layers": 3, "hidden": 128}
+
+    def test_reserved_name_attr_raises(self):
+        config = Config()
+        with pytest.raises(AttributeError, match="reserved"):
+            config.save = "oops"
+
+    def test_reserved_name_bracket_works(self):
+        config = Config()
+        config["save"] = "ok"
+        assert config["save"] == "ok"
 
 
 class TestEntry:
