@@ -57,10 +57,7 @@ class Config(dict):
     def __getattr__(self, name: str) -> Any:
         if name.startswith("_"):
             raise AttributeError(name)
-        try:
-            return self[name]
-        except KeyError:
-            raise AttributeError(f"Config has no attribute '{name}'") from None
+        return self.get(name)
 
     def __setattr__(self, name: str, value: Any) -> None:
         if name.startswith("_"):

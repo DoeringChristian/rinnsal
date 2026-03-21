@@ -29,10 +29,9 @@ class TestConfig:
         config = Config({"learning_rate": 0.01})
         assert config.learning_rate == 0.01
 
-    def test_attribute_error(self):
+    def test_missing_attribute_returns_none(self):
         config = Config()
-        with pytest.raises(AttributeError, match="no attribute"):
-            _ = config.missing
+        assert config.missing is None
 
     def test_item_access(self):
         config = Config({"a": 1})
