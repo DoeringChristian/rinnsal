@@ -64,11 +64,16 @@ def _worker_execute(
             None,
         )
     except Exception as e:
+        import traceback
+
+        tb = traceback.format_exception(e)
+        stderr_val = stderr_capture.getvalue()
+        stderr_val += "".join(tb)
         return (
             False,
             None,
             stdout_capture.getvalue(),
-            stderr_capture.getvalue(),
+            stderr_val,
             cloudpickle.dumps(e),
         )
     finally:
