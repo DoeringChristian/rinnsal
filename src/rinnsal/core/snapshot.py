@@ -149,9 +149,12 @@ class SnapshotManager:
         if snapshot_hash in self._snapshots:
             return snapshot_hash, self._snapshots[snapshot_hash]
 
-        # Create snapshot directory
+        # Check if snapshot exists on disk from a previous run
         if self._snapshot_dir:
             snapshot_path = self._snapshot_dir / snapshot_hash
+            if snapshot_path.exists():
+                self._snapshots[snapshot_hash] = snapshot_path
+                return snapshot_hash, snapshot_path
             snapshot_path.mkdir(parents=True, exist_ok=True)
         else:
             snapshot_path = Path(tempfile.mkdtemp(prefix="rinnsal_snapshot_"))
@@ -198,8 +201,13 @@ class SnapshotManager:
 
             rel_path = py_file.relative_to(src)
             dst_file = dst / rel_path
+            if dst_file.exists():
+                continue
             dst_file.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(py_file, dst_file)
+            try:
+                shutil.copy2(py_file, dst_file)
+            except PermissionError:
+                continue
 
     def get_snapshot_path(self, snapshot_hash: str) -> Path | None:
         """Get the path to a snapshot by its hash."""
