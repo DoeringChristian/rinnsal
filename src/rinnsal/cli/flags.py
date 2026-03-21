@@ -54,6 +54,13 @@ def add_builtin_flags(parser: argparse.ArgumentParser) -> None:
         help="Print the task DAG without executing",
     )
 
+    builtin_group.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help="Re-run only failed/incomplete tasks from the last run",
+    )
+
 
 def extract_builtin_flags(namespace: argparse.Namespace) -> dict[str, Any]:
     """Extract built-in flags from a parsed namespace.
@@ -67,6 +74,7 @@ def extract_builtin_flags(namespace: argparse.Namespace) -> dict[str, Any]:
         "no_capture": getattr(namespace, "no_capture", False),
         "db_path": getattr(namespace, "db_path", ".rinnsal"),
         "dry_run": getattr(namespace, "dry_run", False),
+        "resume": getattr(namespace, "resume", False),
     }
 
 
@@ -75,5 +83,5 @@ def remove_builtin_flags(kwargs: dict[str, Any]) -> dict[str, Any]:
 
     Returns a new dict with only user-defined arguments.
     """
-    builtin_keys = {"executor", "filter", "no_capture", "db_path", "dry_run"}
+    builtin_keys = {"executor", "filter", "no_capture", "db_path", "dry_run", "resume"}
     return {k: v for k, v in kwargs.items() if k not in builtin_keys}

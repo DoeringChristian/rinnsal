@@ -117,6 +117,7 @@ class FlowResult:
             return self._return_value
 
         filter_pattern = self._builtin_flags.get("filter")
+        resume = self._builtin_flags.get("resume", False)
 
         dag = DAG.from_expressions(self._tasks)
         ordered = dag.topological_sort()
@@ -129,11 +130,7 @@ class FlowResult:
             sys.stdout.write(f"Tasks ({len(ordered)}):\n")
             for expr in ordered:
                 deps = dag.get_dependencies(expr.hash)
-                dep_names = [
-                    e.task_name
-                    for e in ordered
-                    if e.hash in deps
-                ]
+                dep_names = [e.task_name for e in ordered if e.hash in deps]
                 if dep_names:
                     sys.stdout.write(
                         f"  {expr.task_name} <- {', '.join(dep_names)}\n"
@@ -146,7 +143,42 @@ class FlowResult:
         database = engine.database
 
         # Determine which tasks to execute vs load from cache
-        if filter_pattern:
+        if resume:
+            if database is None:
+                raise ValueError(
+                    "Resume mode requires a database for cached results"
+                )
+
+            runs = database.fetch_flow_runs(self._flow_name, limit=1)
+            if not runs:
+                raise ValueError(
+                    f"No previous runs found for flow '{self._flow_name}'"
+                )
+            prev_hashes = set(runs[0]["task_hashes"])
+
+            # Tasks that succeeded in the last run → load from cache
+            # Tasks that are new or failed → execute fresh
+            matched_hashes = set()
+            for e in ordered:
+                if e.hash in prev_hashes and database.task_exists(
+                    e.hash, e.task_name
+                ):
+                    pass  # will be loaded from cache
+                else:
+                    matched_hashes.add(e.hash)
+
+            # If --filter is also set, narrow to only tasks matching the pattern
+            if filter_pattern:
+                regex = re.compile(filter_pattern)
+                filter_matches = {
+                    t.hash
+                    for t in self._tasks
+                    if regex.search(t.task_name)
+                    or regex.search(t.func.__name__)
+                }
+                matched_hashes &= filter_matches
+
+        elif filter_pattern:
             if database is None:
                 raise ValueError(
                     "Filter mode requires a database for cached results"
@@ -238,16 +270,17 @@ class FlowResult:
                     )
                     if cached is None:
                         failed_hashes.add(expr.hash)
-                        errors.append(
-                            (
-                                expr.task_name,
-                                ValueError(
-                                    f"No cached result for dependency "
-                                    f"'{expr.task_name}'. Run the full flow "
-                                    "first to populate the cache."
-                                ),
+                        if not resume:
+                            errors.append(
+                                (
+                                    expr.task_name,
+                                    ValueError(
+                                        f"No cached result for dependency "
+                                        f"'{expr.task_name}'. Run the full "
+                                        "flow first to populate the cache."
+                                    ),
+                                )
                             )
-                        )
                         progress.fail(expr.task_name)
                         n_failed += 1
                     else:
@@ -270,6 +303,9 @@ class FlowResult:
                 database.store_flow_run(
                     self._flow_name,
                     [e.hash for e in ordered],
+                    metadata={
+                        "task_names": {e.task_name: e.hash for e in ordered}
+                    },
                 )
 
             if errors:
