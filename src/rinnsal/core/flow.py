@@ -238,65 +238,75 @@ class FlowResult:
         try:
             failed_hashes: set[str] = set()
             errors: list[tuple[str, Exception]] = []
+            interrupted = False
 
-            for expr in ordered:
-                deps = dag.get_dependencies(expr.hash)
-                if deps & failed_hashes:
-                    failed_hashes.add(expr.hash)
-                    progress.skip(expr.task_name)
-                    n_failed += 1
-                    continue
+            try:
+                for expr in ordered:
+                    deps = dag.get_dependencies(expr.hash)
+                    if deps & failed_hashes:
+                        failed_hashes.add(expr.hash)
+                        progress.skip(expr.task_name)
+                        n_failed += 1
+                        continue
 
-                if expr.hash in matched_hashes:
-                    # Matched (or no filter) — execute fresh
-                    progress.start(expr.task_name)
-                    try:
-                        engine.evaluate(expr)
-                        progress.complete(expr.task_name, cached=False)
-                        n_passed += 1
-                    except Exception as e:
-                        failed_hashes.add(expr.hash)
-                        errors.append((expr.task_name, e))
-                        progress.fail(expr.task_name)
-                        n_failed += 1
-                elif expr.is_evaluated:
-                    progress.complete(expr.task_name, cached=True)
-                    n_cached += 1
-                else:
-                    # Dependency of a matched task — load from cache
-                    progress.start(expr.task_name)
-                    cached = database.fetch_task_result(
-                        expr.hash, expr.task_name
-                    )
-                    if cached is None:
-                        failed_hashes.add(expr.hash)
-                        if not resume:
-                            errors.append(
-                                (
-                                    expr.task_name,
-                                    ValueError(
-                                        f"No cached result for dependency "
-                                        f"'{expr.task_name}'. Run the full "
-                                        "flow first to populate the cache."
-                                    ),
-                                )
-                            )
-                        progress.fail(expr.task_name)
-                        n_failed += 1
-                    else:
-                        expr.set_result(cached.result)
+                    if expr.hash in matched_hashes:
+                        # Matched (or no filter) — execute fresh
+                        progress.start(expr.task_name)
+                        try:
+                            engine.evaluate(expr)
+                            progress.complete(expr.task_name, cached=False)
+                            n_passed += 1
+                        except Exception as e:
+                            failed_hashes.add(expr.hash)
+                            errors.append((expr.task_name, e))
+                            progress.fail(expr.task_name)
+                            n_failed += 1
+                    elif expr.is_evaluated:
                         progress.complete(expr.task_name, cached=True)
                         n_cached += 1
+                    else:
+                        # Dependency of a matched task — load from cache
+                        progress.start(expr.task_name)
+                        cached = database.fetch_task_result(
+                            expr.hash, expr.task_name
+                        )
+                        if cached is None:
+                            failed_hashes.add(expr.hash)
+                            if not resume:
+                                errors.append(
+                                    (
+                                        expr.task_name,
+                                        ValueError(
+                                            f"No cached result for dependency "
+                                            f"'{expr.task_name}'. Run the full "
+                                            "flow first to populate the cache."
+                                        ),
+                                    )
+                                )
+                            progress.fail(expr.task_name)
+                            n_failed += 1
+                        else:
+                            expr.set_result(cached.result)
+                            progress.complete(expr.task_name, cached=True)
+                            n_cached += 1
+            except KeyboardInterrupt:
+                interrupted = True
 
             progress.finish()
 
             elapsed = _time.monotonic() - t_start
             import sys
 
-            sys.stdout.write(
-                f"{n_passed} passed, {n_cached} cached, "
-                f"{n_failed} failed in {elapsed:.1f}s\n"
-            )
+            if interrupted:
+                sys.stdout.write(
+                    f"\nInterrupted: {n_passed} passed, {n_cached} cached, "
+                    f"{n_failed} failed in {elapsed:.1f}s\n"
+                )
+            else:
+                sys.stdout.write(
+                    f"{n_passed} passed, {n_cached} cached, "
+                    f"{n_failed} failed in {elapsed:.1f}s\n"
+                )
 
             # Record flow run
             if database is not None:
@@ -307,6 +317,9 @@ class FlowResult:
                         "task_names": {e.task_name: e.hash for e in ordered}
                     },
                 )
+
+            if interrupted:
+                raise KeyboardInterrupt
 
             if errors:
                 if len(errors) == 1:
