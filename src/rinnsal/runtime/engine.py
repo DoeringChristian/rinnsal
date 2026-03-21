@@ -165,7 +165,8 @@ class ExecutionEngine:
             )
             elapsed = (datetime.now() - t0).total_seconds()
 
-            combined_log += result.stdout + result.stderr
+            attempt_log = result.stdout + result.stderr
+            combined_log += attempt_log
 
             if self._logger is not None:
                 name = expr.task_name
@@ -190,18 +191,18 @@ class ExecutionEngine:
             if result.success:
                 return result.value, combined_log
 
+            # Flush captured output immediately on failure
+            if attempt_log:
+                import sys
+
+                sys.stderr.write(attempt_log)
+                sys.stderr.flush()
+
             last_error = result.error
 
             if attempt < max_attempts - 1:
                 # Will retry
                 continue
-
-        # All attempts failed — flush captured stderr so the user sees it
-        if combined_log:
-            import sys
-
-            sys.stderr.write(combined_log)
-            sys.stderr.flush()
 
         if last_error is not None:
             raise last_error
