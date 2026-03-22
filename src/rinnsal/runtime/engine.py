@@ -86,7 +86,7 @@ class ExecutionEngine:
             resolved_args, resolved_kwargs = self._resolve_args(expr)
 
             # Execute the task
-            result, log = self._execute_with_retry(
+            result, log, card = self._execute_with_retry(
                 expr, resolved_args, resolved_kwargs
             )
 
@@ -96,13 +96,18 @@ class ExecutionEngine:
 
             # Persist to database
             if self._database is not None:
+                metadata: dict[str, Any] = {
+                    "task_name": expr.task_name,
+                    "func_name": expr.func.__name__,
+                }
+                if expr.task_def.resources:
+                    metadata["resources"] = expr.task_def.resources.as_dict()
+                if card:
+                    metadata["card"] = card
                 entry = Entry(
                     result=result,
                     log=log,
-                    metadata={
-                        "task_name": expr.task_name,
-                        "func_name": expr.func.__name__,
-                    },
+                    metadata=metadata,
                     timestamp=datetime.now(),
                 )
                 self._database.store_task_result(expr.hash, entry, expr.task_name)
@@ -144,7 +149,7 @@ class ExecutionEngine:
         expr: TaskExpression,
         resolved_args: tuple[Any, ...],
         resolved_kwargs: dict[str, Any],
-    ) -> tuple[Any, str]:
+    ) -> tuple[Any, str, list[dict] | None]:
         """Execute a task with retry support.
 
         When a Logger is attached, logs task events locally. This works
@@ -152,7 +157,7 @@ class ExecutionEngine:
         happens in the main process after the result is returned.
 
         Returns:
-            Tuple of (result, captured_log)
+            Tuple of (result, captured_log, card_data)
         """
         from concurrent.futures import TimeoutError as FuturesTimeoutError
         from rinnsal.execution.executor import ExecutionResult
@@ -212,7 +217,7 @@ class ExecutionEngine:
                     )
 
             if result.success:
-                return result.value, combined_log
+                return result.value, combined_log, result.card
 
             # Flush captured output immediately on failure
             if attempt_log:
@@ -231,7 +236,7 @@ class ExecutionEngine:
         if expr.task_def.catch_enabled:
             catch_val = expr.task_def.catch
             default = None if catch_val is True else catch_val
-            return default, combined_log
+            return default, combined_log, None
 
         if last_error is not None:
             raise last_error

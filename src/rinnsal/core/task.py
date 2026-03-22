@@ -8,6 +8,7 @@ from typing import Any, Callable, ParamSpec, TypeVar, overload
 from rinnsal.core.expression import TaskExpression
 from rinnsal.core.hashing import compute_task_hash
 from rinnsal.core.registry import get_registry
+from rinnsal.core.types import Resources, _normalize_resources
 
 P = ParamSpec("P")
 R = TypeVar("R")
@@ -29,11 +30,13 @@ class TaskDef:
         retry: int = 0,
         timeout: float | None = None,
         catch: Any = _SENTINEL,
+        resources: dict[str, float] | Resources | None = None,
     ) -> None:
         self._func = func
         self._retry = retry
         self._timeout = timeout
         self._catch = catch
+        self._resources = _normalize_resources(resources)
         functools.update_wrapper(self, func)
 
     @property
@@ -55,6 +58,10 @@ class TaskDef:
     @property
     def catch_enabled(self) -> bool:
         return self._catch is not _SENTINEL
+
+    @property
+    def resources(self) -> Resources | None:
+        return self._resources
 
     def __call__(self, *args: Any, **kwargs: Any) -> TaskExpression:
         """Create a lazy TaskExpression for this task call.
@@ -124,6 +131,7 @@ def task(
     retry: int = 0,
     timeout: float | None = None,
     catch: Any = _SENTINEL,
+    resources: dict[str, float] | Resources | None = None,
 ) -> Callable[[Callable[P, R]], TaskDef]: ...
 
 
@@ -133,6 +141,7 @@ def task(
     retry: int = 0,
     timeout: float | None = None,
     catch: Any = _SENTINEL,
+    resources: dict[str, float] | Resources | None = None,
 ) -> TaskDef | Callable[[Callable[P, R]], TaskDef]:
     """Decorator to create a lazy task.
 
@@ -171,11 +180,11 @@ def task(
     """
     if func is not None:
         # Used as @task without parentheses
-        return TaskDef(func, retry=retry, timeout=timeout, catch=catch)
+        return TaskDef(func, retry=retry, timeout=timeout, catch=catch, resources=resources)
 
     # Used as @task(...) with arguments
     def decorator(fn: Callable[P, R]) -> TaskDef:
-        return TaskDef(fn, retry=retry, timeout=timeout, catch=catch)
+        return TaskDef(fn, retry=retry, timeout=timeout, catch=catch, resources=resources)
 
     return decorator
 

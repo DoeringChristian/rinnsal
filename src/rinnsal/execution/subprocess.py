@@ -22,11 +22,11 @@ def _worker_execute(
     serialized_kwargs: bytes,
     capture: bool,
     remapped_pythonpath: str | None = None,
-) -> tuple[bool, Any, str, str, bytes | None]:
+) -> tuple[bool, Any, str, str, bytes | None, list[dict] | None]:
     """Worker function that runs in a subprocess.
 
     Returns:
-        Tuple of (success, result_or_error, stdout, stderr, serialized_error)
+        Tuple of (success, result_or_error, stdout, stderr, serialized_error, card)
     """
     import io
     import sys
@@ -46,6 +46,9 @@ def _worker_execute(
     stdout_capture = io.StringIO()
     stderr_capture = io.StringIO()
 
+    from rinnsal.context import Card, current
+
+    current._set_card(Card())
     try:
         if capture:
             with (
@@ -56,16 +59,19 @@ def _worker_execute(
         else:
             result = func(*args, **kwargs)
 
+        card = current._reset()
         return (
             True,
             cloudpickle.dumps(result),
             stdout_capture.getvalue(),
             stderr_capture.getvalue(),
             None,
+            card.serialize() if card else None,
         )
     except Exception as e:
         import traceback
 
+        current._reset()
         tb = traceback.format_exception(e)
         stderr_val = stderr_capture.getvalue()
         stderr_val += "".join(tb)
@@ -75,6 +81,7 @@ def _worker_execute(
             stdout_capture.getvalue(),
             stderr_val,
             cloudpickle.dumps(e),
+            None,
         )
     finally:
         # Restore original sys.path
@@ -155,7 +162,9 @@ class SubprocessExecutor(Executor):
 
         def callback(f: Future) -> None:
             try:
-                success, result_bytes, stdout, stderr, error_bytes = f.result()
+                success, result_bytes, stdout, stderr, error_bytes, card = (
+                    f.result()
+                )
 
                 if success:
                     result = cloudpickle.loads(result_bytes)
@@ -165,6 +174,7 @@ class SubprocessExecutor(Executor):
                             stdout=stdout,
                             stderr=stderr,
                             success=True,
+                            card=card,
                         )
                     )
                 else:
@@ -297,7 +307,9 @@ class ForkExecutor(Executor):
 
         def callback(f: Future) -> None:
             try:
-                success, result_bytes, stdout, stderr, error_bytes = f.result()
+                success, result_bytes, stdout, stderr, error_bytes, card = (
+                    f.result()
+                )
 
                 if success:
                     result = cloudpickle.loads(result_bytes)
@@ -307,6 +319,7 @@ class ForkExecutor(Executor):
                             stdout=stdout,
                             stderr=stderr,
                             success=True,
+                            card=card,
                         )
                     )
                 else:

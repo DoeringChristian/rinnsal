@@ -186,8 +186,10 @@ class ResourceMatchingScheduler(Scheduler):
 
     def _get_requirements(self, task: TaskExpression) -> dict[str, Any]:
         """Get resource requirements for a task."""
-        # Could be extended to read from task decorator or metadata
-        return {}
+        resources = task.task_def.resources
+        if resources is None:
+            return {}
+        return resources.as_dict()
 
     def _find_matching_worker(
         self,

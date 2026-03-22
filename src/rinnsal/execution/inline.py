@@ -56,9 +56,12 @@ class InlineExecutor(Executor):
         resolved_kwargs: dict[str, Any],
     ) -> ExecutionResult:
         """Execute a task and capture its output."""
+        from rinnsal.context import Card, current
+
         stdout_capture = io.StringIO()
         stderr_capture = io.StringIO()
 
+        current._set_card(Card())
         try:
             if self._capture:
                 with (
@@ -69,13 +72,16 @@ class InlineExecutor(Executor):
             else:
                 value = expr.func(*resolved_args, **resolved_kwargs)
 
+            card = current._reset()
             return ExecutionResult(
                 value=value,
                 stdout=stdout_capture.getvalue(),
                 stderr=stderr_capture.getvalue(),
                 success=True,
+                card=card.serialize() if card else None,
             )
         except Exception as e:
+            current._reset()
             return ExecutionResult(
                 value=None,
                 stdout=stdout_capture.getvalue(),

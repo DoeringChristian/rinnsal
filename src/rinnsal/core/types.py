@@ -133,6 +133,50 @@ class Config(dict):
         return cls(data)
 
 
+@dataclass(frozen=True)
+class Resources:
+    """Resource requirements for a task.
+
+    Declares the compute resources a task needs, enabling the scheduler
+    to place tasks on appropriate workers and avoid oversubscription.
+    """
+
+    gpu: int = 0
+    gpu_memory: int = 0  # MB
+    cpu: int = 0
+    memory: int = 0  # MB
+    extras: dict[str, float] = field(default_factory=dict)
+
+    def as_dict(self) -> dict[str, float]:
+        """Convert to a flat dict for scheduler consumption."""
+        d: dict[str, float] = {}
+        if self.gpu:
+            d["gpu"] = self.gpu
+        if self.gpu_memory:
+            d["gpu_memory"] = self.gpu_memory
+        if self.cpu:
+            d["cpu"] = self.cpu
+        if self.memory:
+            d["memory"] = self.memory
+        d.update(self.extras)
+        return d
+
+
+def _normalize_resources(
+    r: dict[str, float] | Resources | None,
+) -> Resources | None:
+    """Convert a dict to Resources, or pass through None/Resources."""
+    if r is None:
+        return None
+    if isinstance(r, Resources):
+        return r
+    known = set(Resources.__dataclass_fields__) - {"extras"}
+    return Resources(
+        **{k: v for k, v in r.items() if k in known},
+        extras={k: v for k, v in r.items() if k not in known},
+    )
+
+
 @dataclass
 class Snapshot:
     """A code snapshot for reproducibility.
