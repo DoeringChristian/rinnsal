@@ -310,12 +310,16 @@ class FlowResult:
 
             # Record flow run
             if database is not None:
+                run_metadata: dict[str, Any] = {
+                    "task_names": {e.task_name: e.hash for e in ordered},
+                }
+                tags = self._builtin_flags.get("tags", [])
+                if tags:
+                    run_metadata["tags"] = tags
                 database.store_flow_run(
                     self._flow_name,
                     [e.hash for e in ordered],
-                    metadata={
-                        "task_names": {e.task_name: e.hash for e in ordered}
-                    },
+                    metadata=run_metadata,
                 )
 
             if interrupted:

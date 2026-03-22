@@ -13,6 +13,9 @@ P = ParamSpec("P")
 R = TypeVar("R")
 
 
+_SENTINEL = object()
+
+
 class TaskDef:
     """A task definition wrapping a function.
 
@@ -24,9 +27,13 @@ class TaskDef:
         self,
         func: Callable[..., Any],
         retry: int = 0,
+        timeout: float | None = None,
+        catch: Any = _SENTINEL,
     ) -> None:
         self._func = func
         self._retry = retry
+        self._timeout = timeout
+        self._catch = catch
         functools.update_wrapper(self, func)
 
     @property
@@ -36,6 +43,18 @@ class TaskDef:
     @property
     def retry(self) -> int:
         return self._retry
+
+    @property
+    def timeout(self) -> float | None:
+        return self._timeout
+
+    @property
+    def catch(self) -> Any:
+        return self._catch
+
+    @property
+    def catch_enabled(self) -> bool:
+        return self._catch is not _SENTINEL
 
     def __call__(self, *args: Any, **kwargs: Any) -> TaskExpression:
         """Create a lazy TaskExpression for this task call.
@@ -66,6 +85,31 @@ class TaskDef:
 
         return expr
 
+    def map(self, *iterables: Any, **kwargs: Any) -> list[TaskExpression]:
+        """Apply this task to each element of the iterable(s).
+
+        With a single iterable, each element is passed as the first arg.
+        With multiple iterables, elements are zipped and unpacked as args.
+
+        Returns a list of TaskExpressions, one per element.
+        """
+        func_name = self._func.__name__
+        if len(iterables) == 1:
+            results = []
+            for i, item in enumerate(iterables[0]):
+                expr = self(item, **kwargs)
+                if expr._name is None:
+                    expr.name(f"{func_name}[{i}]")
+                results.append(expr)
+            return results
+        results = []
+        for i, args in enumerate(zip(*iterables)):
+            expr = self(*args, **kwargs)
+            if expr._name is None:
+                expr.name(f"{func_name}[{i}]")
+            results.append(expr)
+        return results
+
     def __repr__(self) -> str:
         return f"TaskDef({self._func.__name__}, retry={self._retry})"
 
@@ -78,6 +122,8 @@ def task(func: Callable[P, R]) -> TaskDef: ...
 def task(
     *,
     retry: int = 0,
+    timeout: float | None = None,
+    catch: Any = _SENTINEL,
 ) -> Callable[[Callable[P, R]], TaskDef]: ...
 
 
@@ -85,6 +131,8 @@ def task(
     func: Callable[P, R] | None = None,
     *,
     retry: int = 0,
+    timeout: float | None = None,
+    catch: Any = _SENTINEL,
 ) -> TaskDef | Callable[[Callable[P, R]], TaskDef]:
     """Decorator to create a lazy task.
 
@@ -95,6 +143,9 @@ def task(
     Args:
         func: The function to wrap (when used without parentheses)
         retry: Number of retry attempts on failure (default 0)
+        timeout: Maximum seconds per attempt (default None = no limit)
+        catch: If set, catch failures and use this value as the result.
+            ``catch=True`` uses None, any other value is used directly.
 
     Returns:
         A TaskDef that creates TaskExpressions when called
@@ -104,23 +155,27 @@ def task(
         def source():
             return 10
 
-        @task(retry=3)
+        @task(retry=3, timeout=60)
         def flaky_task():
+            ...
+
+        @task(catch=True)
+        def risky():
             ...
 
         # Returns TaskExpression, not the result
         expr = source()
 
-        # Evaluate to get the result
-        result = expr.eval()
+        # Fan-out over a list
+        results = source.map([1, 2, 3])
     """
     if func is not None:
         # Used as @task without parentheses
-        return TaskDef(func, retry=retry)
+        return TaskDef(func, retry=retry, timeout=timeout, catch=catch)
 
     # Used as @task(...) with arguments
     def decorator(fn: Callable[P, R]) -> TaskDef:
-        return TaskDef(fn, retry=retry)
+        return TaskDef(fn, retry=retry, timeout=timeout, catch=catch)
 
     return decorator
 

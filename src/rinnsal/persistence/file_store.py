@@ -225,6 +225,7 @@ class FileDatabase(BaseDatabase):
         self,
         flow_name: str,
         limit: int | None = None,
+        tags: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Fetch flow run records."""
         runs_dir = self._flow_runs_dir(flow_name)
@@ -241,16 +242,23 @@ class FileDatabase(BaseDatabase):
             reverse=True,
         )
 
-        if limit is not None:
-            run_files = run_files[:limit]
-
         for path in run_files:
             try:
                 with open(path) as f:
                     run_record = json.load(f)
-                    runs.append(run_record)
             except Exception:
                 continue
+
+            if tags:
+                run_tags = set(
+                    run_record.get("metadata", {}).get("tags", [])
+                )
+                if not set(tags) <= run_tags:
+                    continue
+
+            runs.append(run_record)
+            if limit is not None and len(runs) >= limit:
+                break
 
         return runs
 

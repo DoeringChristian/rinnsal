@@ -102,12 +102,14 @@ class Database(Protocol):
         self,
         flow_name: str,
         limit: int | None = None,
+        tags: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Fetch flow run records.
 
         Args:
             flow_name: Name of the flow
             limit: Maximum number of runs to return
+            tags: If set, only return runs containing all specified tags
 
         Returns:
             List of run records, newest first
@@ -167,6 +169,7 @@ class BaseDatabase(ABC):
         self,
         flow_name: str,
         limit: int | None = None,
+        tags: list[str] | None = None,
     ) -> list[dict[str, Any]]: ...
 
     @abstractmethod
@@ -252,8 +255,15 @@ class InMemoryDatabase(BaseDatabase):
         self,
         flow_name: str,
         limit: int | None = None,
+        tags: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         runs = self._flow_runs.get(flow_name, [])
+        if tags:
+            tag_set = set(tags)
+            runs = [
+                r for r in runs
+                if tag_set <= set(r.get("metadata", {}).get("tags", []))
+            ]
         if limit is not None:
             return runs[:limit]
         return runs

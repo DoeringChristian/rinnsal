@@ -61,12 +61,21 @@ def add_builtin_flags(parser: argparse.ArgumentParser) -> None:
         help="Re-run only failed/incomplete tasks from the last run",
     )
 
+    builtin_group.add_argument(
+        "--tag",
+        type=str,
+        action="append",
+        default=[],
+        metavar="TAG",
+        help="Tag this run for later filtering (repeatable)",
+    )
+
 
 def extract_builtin_flags(namespace: argparse.Namespace) -> dict[str, Any]:
     """Extract built-in flags from a parsed namespace.
 
     Returns:
-        Dictionary with keys: executor, filter, no_capture, db_path
+        Dictionary with keys: executor, filter, no_capture, db_path, etc.
     """
     return {
         "executor": getattr(namespace, "executor", "subprocess"),
@@ -75,6 +84,7 @@ def extract_builtin_flags(namespace: argparse.Namespace) -> dict[str, Any]:
         "db_path": getattr(namespace, "db_path", ".rinnsal"),
         "dry_run": getattr(namespace, "dry_run", False),
         "resume": getattr(namespace, "resume", False),
+        "tags": getattr(namespace, "tag", []),
     }
 
 
@@ -83,5 +93,8 @@ def remove_builtin_flags(kwargs: dict[str, Any]) -> dict[str, Any]:
 
     Returns a new dict with only user-defined arguments.
     """
-    builtin_keys = {"executor", "filter", "no_capture", "db_path", "dry_run", "resume"}
+    builtin_keys = {
+        "executor", "filter", "no_capture", "db_path", "dry_run", "resume",
+        "tag", "tags",
+    }
     return {k: v for k, v in kwargs.items() if k not in builtin_keys}

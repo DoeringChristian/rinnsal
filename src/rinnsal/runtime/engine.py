@@ -154,15 +154,38 @@ class ExecutionEngine:
         Returns:
             Tuple of (result, captured_log)
         """
+        from concurrent.futures import TimeoutError as FuturesTimeoutError
+        from rinnsal.execution.executor import ExecutionResult
+
         max_attempts = expr.task_def.retry + 1
+        timeout = expr.task_def.timeout
         last_error: Exception | None = None
         combined_log = ""
 
         for attempt in range(max_attempts):
             t0 = datetime.now()
-            result = self._executor.execute_sync(
-                expr, resolved_args, resolved_kwargs
-            )
+
+            if timeout is not None:
+                # Use submit + future.result(timeout) for timeout support
+                future = self._executor.submit(
+                    expr, resolved_args, resolved_kwargs
+                )
+                try:
+                    result = future.result(timeout=timeout)
+                except FuturesTimeoutError:
+                    result = ExecutionResult(
+                        value=None,
+                        success=False,
+                        error=TimeoutError(
+                            f"Task '{expr.task_name}' timed out "
+                            f"after {timeout}s"
+                        ),
+                    )
+            else:
+                result = self._executor.execute_sync(
+                    expr, resolved_args, resolved_kwargs
+                )
+
             elapsed = (datetime.now() - t0).total_seconds()
 
             attempt_log = result.stdout + result.stderr
@@ -203,6 +226,12 @@ class ExecutionEngine:
             if attempt < max_attempts - 1:
                 # Will retry
                 continue
+
+        # All attempts failed — check if catch is enabled
+        if expr.task_def.catch_enabled:
+            catch_val = expr.task_def.catch
+            default = None if catch_val is True else catch_val
+            return default, combined_log
 
         if last_error is not None:
             raise last_error
