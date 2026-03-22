@@ -214,9 +214,9 @@ class ExecutionEngine:
         """Clear the in-memory evaluation cache."""
         self._evaluated.clear()
 
-    def shutdown(self) -> None:
+    def shutdown(self, wait: bool = True) -> None:
         """Shutdown the executor."""
-        self._executor.shutdown()
+        self._executor.shutdown(wait=wait)
 
     def __enter__(self) -> ExecutionEngine:
         return self

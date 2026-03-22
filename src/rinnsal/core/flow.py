@@ -332,7 +332,7 @@ class FlowResult:
             return self._return_value
         finally:
             if not self._builtin_flags.get("_engine_preset"):
-                engine.shutdown()
+                engine.shutdown(wait=not interrupted)
 
     def results(self) -> Any:
         """Load cached results for all returned tasks and return the original structure."""

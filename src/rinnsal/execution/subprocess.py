@@ -98,6 +98,7 @@ class SubprocessExecutor(Executor):
         super().__init__(capture=capture, snapshot=snapshot)
         self._max_workers = max_workers or os.cpu_count() or 4
         self._pool: ProcessPoolExecutor | None = None
+        self._mp_context = mp.get_context("spawn")
 
     @property
     def max_workers(self) -> int:
@@ -108,7 +109,7 @@ class SubprocessExecutor(Executor):
         if self._pool is None:
             self._pool = ProcessPoolExecutor(
                 max_workers=self._max_workers,
-                mp_context=mp.get_context("spawn"),
+                mp_context=self._mp_context,
             )
         return self._pool
 
@@ -192,10 +193,29 @@ class SubprocessExecutor(Executor):
         return result_future
 
     def shutdown(self, wait: bool = True) -> None:
-        """Shutdown the process pool."""
+        """Shutdown the process pool.
+
+        Args:
+            wait: If True, wait for workers to finish gracefully.
+                  If False, kill worker processes immediately.
+        """
         if self._pool is not None:
-            self._pool.shutdown(wait=wait)
+            if wait:
+                self._pool.shutdown(wait=True)
+            else:
+                self._pool.shutdown(wait=False, cancel_futures=True)
+                self._kill_workers()
             self._pool = None
+
+    def _kill_workers(self) -> None:
+        """Terminate all worker processes in the pool."""
+        # ProcessPoolExecutor stores worker processes in _processes
+        processes = getattr(self._pool, "_processes", None)
+        if processes:
+            for pid, proc in list(processes.items()):
+                if proc.is_alive():
+                    proc.kill()
+                proc.join(timeout=5)
 
     def __repr__(self) -> str:
         return f"SubprocessExecutor(max_workers={self._max_workers}, capture={self._capture})"
@@ -228,9 +248,10 @@ class ForkExecutor(Executor):
     def _get_pool(self) -> ProcessPoolExecutor:
         """Get or create the fork-based process pool."""
         if self._pool is None:
+            self._mp_context = mp.get_context("fork")
             self._pool = ProcessPoolExecutor(
                 max_workers=self._max_workers,
-                mp_context=mp.get_context("fork"),
+                mp_context=self._mp_context,
             )
         return self._pool
 
@@ -314,10 +335,28 @@ class ForkExecutor(Executor):
         return result_future
 
     def shutdown(self, wait: bool = True) -> None:
-        """Shutdown the process pool."""
+        """Shutdown the process pool.
+
+        Args:
+            wait: If True, wait for workers to finish gracefully.
+                  If False, kill worker processes immediately.
+        """
         if self._pool is not None:
-            self._pool.shutdown(wait=wait)
+            if wait:
+                self._pool.shutdown(wait=True)
+            else:
+                self._pool.shutdown(wait=False, cancel_futures=True)
+                self._kill_workers()
             self._pool = None
+
+    def _kill_workers(self) -> None:
+        """Terminate all worker processes in the pool."""
+        processes = getattr(self._pool, "_processes", None)
+        if processes:
+            for pid, proc in list(processes.items()):
+                if proc.is_alive():
+                    proc.kill()
+                proc.join(timeout=5)
 
     def __repr__(self) -> str:
         return f"ForkExecutor(max_workers={self._max_workers}, capture={self._capture})"
