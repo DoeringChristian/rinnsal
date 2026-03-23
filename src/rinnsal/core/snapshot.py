@@ -9,8 +9,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Callable, Any
+from typing import Any, Callable, Generator
 
 
 def find_git_root(start: Path | None = None) -> Path | None:
@@ -240,3 +241,121 @@ def set_snapshot_manager(manager: SnapshotManager) -> None:
     """Set the global snapshot manager."""
     global _snapshot_manager
     _snapshot_manager = manager
+
+
+def _invalidate_project_modules(snapshot_path: Path | None) -> None:
+    """Remove project-local modules from sys.modules.
+
+    This forces Python to re-import them from the (possibly remapped)
+    sys.path. Only removes modules whose file is under the git root
+    or the snapshot path — stdlib, third-party, and rinnsal's own
+    modules are untouched.
+    """
+    git_root = find_git_root()
+    prefixes = []
+    if git_root:
+        prefixes.append(str(git_root.resolve()))
+    if snapshot_path:
+        prefixes.append(str(snapshot_path.resolve()))
+
+    if not prefixes:
+        return
+
+    # Never invalidate rinnsal itself — it's framework code
+    protected = ("rinnsal.",)
+
+    to_remove = []
+    for name, mod in sys.modules.items():
+        if mod is None:
+            continue
+        if any(name.startswith(p) for p in protected):
+            continue
+        mod_file = getattr(mod, "__file__", None)
+        if mod_file is None:
+            continue
+        resolved = str(Path(mod_file).resolve())
+        if any(resolved.startswith(p) for p in prefixes):
+            to_remove.append(name)
+
+    for name in to_remove:
+        del sys.modules[name]
+
+
+def _resolve_snapshot_hash(
+    hash: str | None = None,
+    flow: str | None = None,
+    db_path: str = ".rinnsal",
+) -> tuple[str, Path]:
+    """Resolve a snapshot hash and path from either a direct hash or flow name.
+
+    Returns:
+        Tuple of (snapshot_hash, snapshot_path)
+    """
+    if hash is None and flow is None:
+        raise ValueError("Either 'hash' or 'flow' must be provided")
+
+    if flow is not None:
+        from rinnsal.persistence.file_store import FileDatabase
+
+        db = FileDatabase(root=db_path)
+        runs = db.fetch_flow_runs(flow, limit=1)
+        if not runs:
+            raise ValueError(f"No runs found for flow '{flow}'")
+        hash = runs[0].get("metadata", {}).get("snapshot")
+        if not hash:
+            raise ValueError(
+                f"Latest run of '{flow}' has no snapshot recorded. "
+                "Re-run the flow to create a snapshot."
+            )
+
+    snapshot_path = Path(db_path) / "snapshots" / hash
+    if not snapshot_path.exists():
+        raise ValueError(f"Snapshot '{hash}' not found at {snapshot_path}")
+
+    return hash, snapshot_path
+
+
+@contextmanager
+def use_snapshot(
+    hash: str | None = None,
+    flow: str | None = None,
+    db_path: str = ".rinnsal",
+) -> Generator[Path, None, None]:
+    """Remap sys.path to use a previous code snapshot.
+
+    All imports inside the context manager resolve against the snapshot,
+    allowing you to run code using the exact module versions from a
+    previous execution.
+
+    Args:
+        hash: Snapshot hash to use directly
+        flow: Flow name — uses the snapshot from its latest run
+        db_path: Path to the .rinnsal database directory
+
+    Yields:
+        The snapshot directory path
+
+    Examples:
+        with use_snapshot(flow="my_training_flow"):
+            from my_module import viewer
+            viewer.show(result)
+
+        with use_snapshot(hash="abc123def456"):
+            import my_module
+            my_module.inspect(data)
+    """
+    _, snapshot_path = _resolve_snapshot_hash(hash, flow, db_path)
+
+    # Remap sys.path
+    original_path = sys.path.copy()
+    remapped = build_pythonpath(snapshot_path)
+    sys.path = remapped.split(os.pathsep)
+
+    # Clear project modules so imports pick up snapshot versions
+    _invalidate_project_modules(snapshot_path)
+
+    try:
+        yield snapshot_path
+    finally:
+        sys.path = original_path
+        _invalidate_project_modules(None)

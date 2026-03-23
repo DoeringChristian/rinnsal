@@ -70,6 +70,22 @@ def add_builtin_flags(parser: argparse.ArgumentParser) -> None:
         help="Tag this run for later filtering (repeatable)",
     )
 
+    builtin_group.add_argument(
+        "--snapshot",
+        type=str,
+        default=None,
+        metavar="HASH",
+        help="Run using a previous code snapshot (by hash)",
+    )
+
+    builtin_group.add_argument(
+        "--snapshot-from",
+        type=str,
+        default=None,
+        metavar="FLOW_NAME",
+        help="Run using the snapshot from the latest run of FLOW_NAME",
+    )
+
 
 def extract_builtin_flags(namespace: argparse.Namespace) -> dict[str, Any]:
     """Extract built-in flags from a parsed namespace.
@@ -85,6 +101,8 @@ def extract_builtin_flags(namespace: argparse.Namespace) -> dict[str, Any]:
         "dry_run": getattr(namespace, "dry_run", False),
         "resume": getattr(namespace, "resume", False),
         "tags": getattr(namespace, "tag", []),
+        "snapshot": getattr(namespace, "snapshot", None),
+        "snapshot_from": getattr(namespace, "snapshot_from", None),
     }
 
 
@@ -95,6 +113,6 @@ def remove_builtin_flags(kwargs: dict[str, Any]) -> dict[str, Any]:
     """
     builtin_keys = {
         "executor", "filter", "no_capture", "db_path", "dry_run", "resume",
-        "tag", "tags",
+        "tag", "tags", "snapshot", "snapshot_from",
     }
     return {k: v for k, v in kwargs.items() if k not in builtin_keys}

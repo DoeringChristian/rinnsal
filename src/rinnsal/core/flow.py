@@ -92,8 +92,18 @@ class FlowResult:
     def flow_name(self) -> str:
         return self._flow_name
 
-    def run(self) -> Any:
+    def run(
+        self,
+        snapshot: str | None = None,
+        snapshot_from: str | None = None,
+    ) -> Any:
         """Execute tasks and return the original structure.
+
+        Args:
+            snapshot: Run using a previous code snapshot (by hash).
+                Overrides the ``--snapshot`` CLI flag.
+            snapshot_from: Run using the snapshot from the latest run
+                of the named flow. Overrides ``--snapshot-from``.
 
         Without ``--filter``, every task executes fresh via
         ``engine.evaluate()``.
@@ -113,6 +123,25 @@ class FlowResult:
         5. **Error propagation** — if a dependency fails to load or a
            matched task raises, downstream tasks are skipped.
         """
+        if not self._tasks:
+            return self._return_value
+
+        # Resolve snapshot: programmatic args override CLI flags
+        snap_hash = snapshot or self._builtin_flags.get("snapshot")
+        snap_flow = snapshot_from or self._builtin_flags.get("snapshot_from")
+
+        if snap_hash or snap_flow:
+            from rinnsal.core.snapshot import use_snapshot
+
+            db_path = self._builtin_flags.get("db_path", ".rinnsal")
+            with use_snapshot(
+                hash=snap_hash, flow=snap_flow, db_path=db_path
+            ):
+                return self._run_inner()
+        return self._run_inner()
+
+    def _run_inner(self) -> Any:
+        """Internal run implementation (may be wrapped by use_snapshot)."""
         if not self._tasks:
             return self._return_value
 
@@ -316,6 +345,21 @@ class FlowResult:
                 tags = self._builtin_flags.get("tags", [])
                 if tags:
                     run_metadata["tags"] = tags
+
+                # Record snapshot hash
+                try:
+                    from rinnsal.core.snapshot import get_snapshot_manager
+
+                    manager = get_snapshot_manager()
+                    if ordered:
+                        snap_hash, _ = manager.create_snapshot(
+                            ordered[0].func
+                        )
+                        if snap_hash:
+                            run_metadata["snapshot"] = snap_hash
+                except Exception:
+                    pass
+
                 database.store_flow_run(
                     self._flow_name,
                     [e.hash for e in ordered],

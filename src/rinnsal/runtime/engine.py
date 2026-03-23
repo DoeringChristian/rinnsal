@@ -104,11 +104,28 @@ class ExecutionEngine:
                     metadata["resources"] = expr.task_def.resources.as_dict()
                 if card:
                     metadata["card"] = card
+
+                # Look up snapshot (cached, so this is a no-op if already created)
+                snapshot_obj = None
+                try:
+                    from rinnsal.core.snapshot import get_snapshot_manager
+                    from rinnsal.core.types import Snapshot
+
+                    manager = get_snapshot_manager()
+                    snap_hash, snap_path = manager.create_snapshot(expr.func)
+                    if snap_hash:
+                        snapshot_obj = Snapshot(
+                            hash=snap_hash, path=snap_path
+                        )
+                except Exception:
+                    pass
+
                 entry = Entry(
                     result=result,
                     log=log,
                     metadata=metadata,
                     timestamp=datetime.now(),
+                    snapshot=snapshot_obj,
                 )
                 self._database.store_task_result(expr.hash, entry, expr.task_name)
 
