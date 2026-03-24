@@ -38,6 +38,7 @@ class Executor(ABC):
     ) -> None:
         self._capture = capture
         self._snapshot = snapshot
+        self._checkpoint_path: str | None = None
 
     @property
     def capture(self) -> bool:

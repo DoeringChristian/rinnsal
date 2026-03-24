@@ -85,9 +85,23 @@ class ExecutionEngine:
             # Resolve arguments
             resolved_args, resolved_kwargs = self._resolve_args(expr)
 
+            # Compute checkpoint path (only for file-based databases)
+            checkpoint_path = None
+            if self._database is not None and hasattr(
+                self._database, "_task_results_dir"
+            ):
+                from pathlib import Path
+
+                task_dir = self._database._task_results_dir(
+                    expr.hash, task_name=expr.task_name or None
+                )
+                task_dir.mkdir(parents=True, exist_ok=True)
+                checkpoint_path = task_dir / "checkpoint.dat"
+
             # Execute the task
             result, log, card = self._execute_with_retry(
-                expr, resolved_args, resolved_kwargs
+                expr, resolved_args, resolved_kwargs,
+                checkpoint_path=checkpoint_path,
             )
 
             # Store the result
@@ -166,6 +180,7 @@ class ExecutionEngine:
         expr: TaskExpression,
         resolved_args: tuple[Any, ...],
         resolved_kwargs: dict[str, Any],
+        checkpoint_path: Any = None,
     ) -> tuple[Any, str, list[dict] | None]:
         """Execute a task with retry support.
 
@@ -183,6 +198,13 @@ class ExecutionEngine:
         timeout = expr.task_def.timeout
         last_error: Exception | None = None
         combined_log = ""
+
+        # Set up checkpoint context
+        if checkpoint_path is not None:
+            from rinnsal.context import Checkpoint, current as _current
+
+            _current._set_checkpoint(Checkpoint(path=checkpoint_path))
+            self._executor._checkpoint_path = str(checkpoint_path)
 
         for attempt in range(max_attempts):
             t0 = datetime.now()

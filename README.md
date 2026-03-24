@@ -78,6 +78,79 @@ def flaky_operation():
     ...
 ```
 
+Tasks can have a timeout to prevent hanging:
+
+```python
+@task(timeout=60)
+def gpu_train(data):
+    ...  # Killed after 60s if stuck
+```
+
+Tasks can catch failures and continue with a default value:
+
+```python
+@task(catch=True)
+def risky(x):
+    ...  # Returns None on failure, downstream continues
+
+@task(catch="fallback")
+def maybe(x):
+    ...  # Returns "fallback" on failure
+```
+
+`catch` applies after retries are exhausted: `@task(retry=3, catch=True)` retries 3 times,
+then returns `None` if all attempts fail.
+
+### Fan-out with `.map()`
+
+Apply a task to each element of an iterable:
+
+```python
+@task
+def process(item):
+    return item * 2
+
+results = process.map([1, 2, 3])        # 3 TaskExpressions
+pairs = add.map([1, 2], [10, 20])       # Multi-arg: zip and apply
+```
+
+Each mapped task is auto-named `process[0]`, `process[1]`, etc.
+
+### Resource Declarations
+
+Declare compute resources a task needs:
+
+```python
+from rinnsal import Resources
+
+@task(resources=Resources(gpu=1, gpu_memory=16000))
+def train(data): ...
+
+@task(resources={"gpu_memory": 8000})  # Dict shorthand
+def evaluate(model): ...
+```
+
+Resources are stored in execution metadata and used by the scheduler
+to match tasks to workers.
+
+### Cards
+
+Attach rich content to task results for inspection:
+
+```python
+from rinnsal import current
+
+@task
+def train(data):
+    model = fit(data)
+    current.card.text(f"Accuracy: {model.accuracy}")
+    current.card.image(model.loss_plot(), title="Loss Curve")
+    current.card.table(metrics, headers=["Epoch", "Loss", "Acc"])
+    return model
+```
+
+Card data is stored in the Entry metadata and viewable in the web UI.
+
 ### Flows
 
 Flows compose tasks into a DAG:
@@ -160,10 +233,15 @@ Results are persisted to disk automatically and available across sessions.
 Built-in flags work automatically:
 
 ```bash
-python script.py -s              # Show task output (no capture)
-python script.py --no-cache      # Disable caching
-python script.py --executor subprocess  # Use subprocess executor
-python script.py --filter "train.*"     # Only run matching tasks
+python script.py -s                          # Show task output (no capture)
+python script.py --executor subprocess       # Select executor
+python script.py --filter "train.*"          # Only run matching tasks
+python script.py --resume                    # Re-run only failed tasks
+python script.py --dry-run                   # Print DAG without executing
+python script.py --tag experiment-v2         # Tag the run (repeatable)
+python script.py --snapshot abc123           # Run using a previous snapshot
+python script.py --snapshot-from my_flow     # Use snapshot from latest run
+python script.py --db-path .rinnsal          # Database directory
 ```
 
 ### Task Filtering
@@ -181,6 +259,44 @@ When using `--filter`:
 - Non-matching tasks that aren't dependencies are skipped
 
 This requires a previous full run to populate the cache for dependencies.
+
+### Resuming Failed Runs
+
+When a flow partially fails, re-run only the failures:
+
+```bash
+python script.py            # First run: some tasks fail
+python script.py --resume   # Re-run only failed tasks, load successes from cache
+```
+
+Combine with `--filter` to narrow further:
+
+```bash
+python script.py --resume --filter "train.*"  # Only retry failed training tasks
+```
+
+### Dry Run
+
+Print the task DAG without executing:
+
+```bash
+python script.py --dry-run
+# Flow: my_pipeline
+# Tasks (3):
+#   load_data
+#   process <- load_data
+#   save <- process
+```
+
+### Run Tagging
+
+Tag flow runs for organization and later filtering:
+
+```bash
+python script.py --tag experiment-v2 --tag gpu-a100
+```
+
+Tags are stored in flow run metadata and can be used to filter past runs.
 
 ### Caching
 
@@ -281,6 +397,36 @@ code even if files change during execution:
 ```python
 executor = SubprocessExecutor(snapshot=True)  # Default
 executor = SubprocessExecutor(snapshot=False)  # Disable
+```
+
+### Snapshot Replay
+
+Run code against a previous snapshot. Useful when you've modified code
+but want to inspect results from an earlier run using the original modules:
+
+```python
+from rinnsal import use_snapshot
+
+# Use the snapshot from the latest run of a flow
+with use_snapshot(flow="my_training_flow"):
+    from my_module import viewer
+    viewer.show(result)
+
+# Or by snapshot hash directly
+with use_snapshot(hash="abc123def456"):
+    import my_module
+    my_module.inspect(data)
+```
+
+Also available as CLI flags or flow parameters:
+
+```bash
+python view.py --snapshot-from my_training_flow
+python view.py --snapshot abc123
+```
+
+```python
+view_flow().run(snapshot_from="my_training_flow")
 ```
 
 ## Examples

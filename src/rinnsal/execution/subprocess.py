@@ -22,6 +22,7 @@ def _worker_execute(
     serialized_kwargs: bytes,
     capture: bool,
     remapped_pythonpath: str | None = None,
+    checkpoint_path: str | None = None,
 ) -> tuple[bool, Any, str, str, bytes | None, list[dict] | None]:
     """Worker function that runs in a subprocess.
 
@@ -31,6 +32,7 @@ def _worker_execute(
     import io
     import sys
     from contextlib import redirect_stderr, redirect_stdout
+    from pathlib import Path
 
     # If remapped PYTHONPATH provided, replace sys.path
     original_path = None
@@ -46,9 +48,11 @@ def _worker_execute(
     stdout_capture = io.StringIO()
     stderr_capture = io.StringIO()
 
-    from rinnsal.context import Card, current
+    from rinnsal.context import Card, Checkpoint, current
 
     current._set_card(Card())
+    if checkpoint_path:
+        current._set_checkpoint(Checkpoint(path=Path(checkpoint_path)))
     try:
         if capture:
             with (
@@ -155,6 +159,7 @@ class SubprocessExecutor(Executor):
             serialized_kwargs,
             self._capture,
             remapped_pythonpath,
+            self._checkpoint_path,
         )
 
         # Wrap the future to return ExecutionResult

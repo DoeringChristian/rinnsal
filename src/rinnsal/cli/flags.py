@@ -21,7 +21,7 @@ def add_builtin_flags(parser: argparse.ArgumentParser) -> None:
         type=str,
         default="subprocess",
         help="Executor to use for task execution",
-        choices=["inline", "subprocess", "ssh", "ray"],
+        choices=["inline", "subprocess", "ssh", "ray", "slurm"],
     )
 
     builtin_group.add_argument(

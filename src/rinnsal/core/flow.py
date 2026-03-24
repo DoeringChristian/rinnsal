@@ -269,8 +269,39 @@ class FlowResult:
             errors: list[tuple[str, Exception]] = []
             interrupted = False
 
-            try:
-                for expr in ordered:
+            # Build set of all ordered hashes for tracking
+            ordered_hashes = {e.hash for e in ordered}
+            ordered_map = {e.hash: e for e in ordered}
+            completed: set[str] = set()
+
+            # In-flight futures for parallel execution
+            from concurrent.futures import Future
+
+            in_flight: dict[str, tuple[TaskExpression, Future]] = {}
+
+            def _process_ready_tasks() -> None:
+                """Submit all ready tasks that can run now."""
+                nonlocal n_passed, n_cached, n_failed
+
+                ready = dag.get_ready_tasks(
+                    completed | failed_hashes
+                )
+                # Preserve insertion order for stable execution
+                ready.sort(
+                    key=lambda e: dag._insertion_order.get(
+                        e.hash, float("inf")
+                    )
+                )
+
+                for expr in ready:
+                    if expr.hash not in ordered_hashes:
+                        continue
+                    if expr.hash in in_flight:
+                        continue
+                    if expr.hash in completed or expr.hash in failed_hashes:
+                        continue
+
+                    # Check if any dependency failed
                     deps = dag.get_dependencies(expr.hash)
                     if deps & failed_hashes:
                         failed_hashes.add(expr.hash)
@@ -279,12 +310,62 @@ class FlowResult:
                         continue
 
                     if expr.hash in matched_hashes:
-                        # Matched (or no filter) — execute fresh
+                        # Execute fresh
                         progress.start(expr.task_name)
                         try:
-                            engine.evaluate(expr)
+                            result, log, card = engine._execute_with_retry(
+                                expr,
+                                *engine._resolve_args(expr),
+                            )
+                            expr.set_result(result)
+                            engine._evaluated[expr.hash] = result
+
+                            # Persist to database
+                            if database is not None:
+                                from datetime import datetime
+                                from rinnsal.core.types import Entry
+
+                                metadata: dict[str, Any] = {
+                                    "task_name": expr.task_name,
+                                    "func_name": expr.func.__name__,
+                                }
+                                if expr.task_def.resources:
+                                    metadata["resources"] = (
+                                        expr.task_def.resources.as_dict()
+                                    )
+                                if card:
+                                    metadata["card"] = card
+
+                                snapshot_obj = None
+                                try:
+                                    from rinnsal.core.snapshot import (
+                                        get_snapshot_manager,
+                                    )
+                                    from rinnsal.core.types import Snapshot
+
+                                    mgr = get_snapshot_manager()
+                                    sh, sp = mgr.create_snapshot(expr.func)
+                                    if sh:
+                                        snapshot_obj = Snapshot(
+                                            hash=sh, path=sp
+                                        )
+                                except Exception:
+                                    pass
+
+                                entry = Entry(
+                                    result=result,
+                                    log=log,
+                                    metadata=metadata,
+                                    timestamp=datetime.now(),
+                                    snapshot=snapshot_obj,
+                                )
+                                database.store_task_result(
+                                    expr.hash, entry, expr.task_name
+                                )
+
                             progress.complete(expr.task_name, cached=False)
                             n_passed += 1
+                            completed.add(expr.hash)
                         except Exception as e:
                             failed_hashes.add(expr.hash)
                             errors.append((expr.task_name, e))
@@ -293,8 +374,9 @@ class FlowResult:
                     elif expr.is_evaluated:
                         progress.complete(expr.task_name, cached=True)
                         n_cached += 1
+                        completed.add(expr.hash)
                     else:
-                        # Dependency of a matched task — load from cache
+                        # Load from cache
                         progress.start(expr.task_name)
                         cached = database.fetch_task_result(
                             expr.hash, expr.task_name
@@ -306,9 +388,11 @@ class FlowResult:
                                     (
                                         expr.task_name,
                                         ValueError(
-                                            f"No cached result for dependency "
-                                            f"'{expr.task_name}'. Run the full "
-                                            "flow first to populate the cache."
+                                            f"No cached result for "
+                                            f"dependency "
+                                            f"'{expr.task_name}'. Run "
+                                            "the full flow first to "
+                                            "populate the cache."
                                         ),
                                     )
                                 )
@@ -316,8 +400,26 @@ class FlowResult:
                             n_failed += 1
                         else:
                             expr.set_result(cached.result)
-                            progress.complete(expr.task_name, cached=True)
+                            progress.complete(
+                                expr.task_name, cached=True
+                            )
                             n_cached += 1
+                            completed.add(expr.hash)
+
+            try:
+                # Process tasks level by level
+                while (
+                    len(completed) + len(failed_hashes)
+                    < len(ordered_hashes)
+                ):
+                    prev_total = len(completed) + len(failed_hashes)
+                    _process_ready_tasks()
+                    new_total = len(completed) + len(failed_hashes)
+                    if new_total == prev_total:
+                        # No progress — all remaining tasks have
+                        # unresolvable dependencies (shouldn't happen
+                        # with a valid DAG, but prevents infinite loop)
+                        break
             except KeyboardInterrupt:
                 interrupted = True
 
@@ -654,6 +756,10 @@ def _create_executor(name: str, capture: bool = True) -> Any:
             return RayExecutor(capture=capture)
         except ImportError:
             raise ValueError("Ray executor requires ray to be installed")
+    elif name == "slurm":
+        from rinnsal.execution.slurm import SlurmExecutor
+
+        return SlurmExecutor(capture=capture)
     else:
         raise ValueError(f"Unknown executor: {name}")
 
