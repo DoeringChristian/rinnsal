@@ -444,6 +444,11 @@ See the `examples/` directory:
 - `09_independent_task.py` - Tasks outside flows, `.runs` history
 - `10_capture_tasks.py` - Automatic task capture in flows
 - `11_ssh_executor.py` - Remote execution over SSH
+- `12_filtering.py` - Task filtering with `--filter`
+- `13_slurm_executor.py` - Slurm cluster submission
+- `14_slurm_sweep.py` - Hyperparameter sweep on Slurm with `.map()`
+- `15_checkpointing.py` - Resumable tasks with `current.checkpoint`
+- `16_cards.py` - Rich task output with `current.card`
 
 ## Development
 
