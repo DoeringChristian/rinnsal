@@ -6,7 +6,7 @@ import hashlib
 import inspect
 import os
 import shutil
-import subprocess
+import subprocess as _subprocess
 import sys
 import tempfile
 from contextlib import contextmanager
@@ -20,7 +20,7 @@ def find_git_root(start: Path | None = None) -> Path | None:
         start = Path.cwd()
 
     try:
-        result = subprocess.run(
+        result = _subprocess.run(
             ["git", "rev-parse", "--show-toplevel"],
             capture_output=True,
             text=True,
@@ -28,7 +28,7 @@ def find_git_root(start: Path | None = None) -> Path | None:
         )
         if result.returncode == 0:
             return Path(result.stdout.strip())
-    except (subprocess.SubprocessError, FileNotFoundError):
+    except (_subprocess.SubprocessError, FileNotFoundError):
         pass
 
     # Fallback: walk up looking for .git
@@ -102,15 +102,51 @@ def build_pythonpath(snapshot_path: Path | None = None) -> str:
     return pythonpath
 
 
+_SKIP_DIRS = frozenset(
+    {
+        "__pycache__",
+        ".venv",
+        "venv",
+        ".pixi",
+        ".conda",
+        ".rinnsal",
+        ".git",
+        "node_modules",
+    }
+)
+
+
 class SnapshotManager:
     """Manages code snapshots for task execution.
 
     Creates snapshots of source files so that tasks execute against
     a fixed version of the code, even if files change during execution.
+
+    By default, uses ``git ls-files`` to list tracked files (respects
+    ``.gitignore``, includes configs/templates/etc.). Falls back to
+    ``rglob`` with ``include_patterns`` for non-git projects.
+
+    Args:
+        snapshot_dir: Directory to store persistent snapshots.
+            If None, uses temporary directories that are cleaned up.
+        include_patterns: Glob patterns for files to include.
+            If None (default), uses ``git ls-files`` when in a git repo,
+            or ``["*.py"]`` as fallback.
+            Set to ``["*.py"]`` for the old behavior.
+        max_snapshots: Maximum number of snapshots to keep on disk.
+            When set, the oldest snapshots are pruned after creating a
+            new one. Default None (no garbage collection).
     """
 
-    def __init__(self, snapshot_dir: Path | None = None) -> None:
+    def __init__(
+        self,
+        snapshot_dir: Path | None = None,
+        include_patterns: list[str] | None = None,
+        max_snapshots: int | None = None,
+    ) -> None:
         self._snapshot_dir = snapshot_dir
+        self._include_patterns = include_patterns
+        self._max_snapshots = max_snapshots
         self._snapshots: dict[str, Path] = {}  # hash -> snapshot path
         self._temp_dirs: list[Path] = []
 
@@ -143,7 +179,7 @@ class SnapshotManager:
             if (project_root / "__init__.py").exists():
                 project_root = project_root.parent
 
-        # Compute hash of all Python files in the project
+        # Compute hash of all tracked files in the project
         snapshot_hash = self._compute_hash(project_root)
 
         # Check if we already have this snapshot
@@ -161,54 +197,117 @@ class SnapshotManager:
             snapshot_path = Path(tempfile.mkdtemp(prefix="rinnsal_snapshot_"))
             self._temp_dirs.append(snapshot_path)
 
-        # Copy Python files to snapshot
-        self._copy_python_files(project_root, snapshot_path)
+        # Copy files to snapshot
+        self._copy_files(project_root, snapshot_path)
 
         self._snapshots[snapshot_hash] = snapshot_path
+
+        # Garbage collect old snapshots if configured
+        if self._max_snapshots is not None and self._snapshot_dir:
+            self._prune_snapshots()
+
         return snapshot_hash, snapshot_path
 
+    def _get_file_list(self, root: Path) -> list[Path]:
+        """Get list of files to include in snapshot.
+
+        Uses ``git ls-files`` by default (respects .gitignore, includes
+        all tracked file types). Falls back to rglob with patterns for
+        non-git projects or when include_patterns is set explicitly.
+        """
+        git_root = find_git_root(root)
+
+        if (
+            git_root
+            and git_root.resolve() == root.resolve()
+            and self._include_patterns is None
+        ):
+            # Use git ls-files — respects .gitignore, includes all tracked files
+            try:
+                result = _subprocess.run(
+                    ["git", "ls-files", "-z"],
+                    capture_output=True,
+                    cwd=root,
+                )
+                if result.returncode == 0 and result.stdout:
+                    raw = result.stdout.decode("utf-8", errors="replace")
+                    files = [
+                        root / f
+                        for f in raw.split("\0")
+                        if f and not self._should_skip(Path(f))
+                    ]
+                    return sorted(f for f in files if f.is_file())
+            except (_subprocess.SubprocessError, FileNotFoundError):
+                pass
+
+        # Fallback: rglob with patterns
+        patterns = self._include_patterns or ["*.py"]
+        files: list[Path] = []
+        for pattern in patterns:
+            files.extend(root.rglob(pattern))
+
+        return sorted(
+            f
+            for f in files
+            if f.is_file() and not self._should_skip(f.relative_to(root))
+        )
+
+    @staticmethod
+    def _should_skip(rel_path: Path) -> bool:
+        """Check if a relative path should be excluded from snapshots."""
+        return any(p in _SKIP_DIRS for p in rel_path.parts)
+
     def _compute_hash(self, root: Path) -> str:
-        """Compute a hash of all Python files in the directory."""
+        """Compute a hash of all tracked files in the directory."""
         hasher = hashlib.sha256()
 
-        # Sort files for deterministic ordering
-        py_files = sorted(root.rglob("*.py"))
-
-        for py_file in py_files:
-            # Skip __pycache__, venvs, and .rinnsal artifacts
-            parts = py_file.relative_to(root).parts
-            if any(
-                p in ("__pycache__", ".venv", "venv", ".pixi", ".conda", ".rinnsal")
-                for p in parts
-            ):
-                continue
-
-            rel_path = py_file.relative_to(root)
+        for f in self._get_file_list(root):
+            rel_path = f.relative_to(root)
             hasher.update(str(rel_path).encode())
-            hasher.update(py_file.read_bytes())
-
-        return hasher.hexdigest()[:16]
-
-    def _copy_python_files(self, src: Path, dst: Path) -> None:
-        """Copy Python files from src to dst, preserving structure."""
-        for py_file in src.rglob("*.py"):
-            # Skip __pycache__, venvs, and .rinnsal artifacts
-            parts = py_file.relative_to(src).parts
-            if any(
-                p in ("__pycache__", ".venv", "venv", ".pixi", ".conda", ".rinnsal")
-                for p in parts
-            ):
+            try:
+                hasher.update(f.read_bytes())
+            except (PermissionError, OSError):
+                # Skip files we can't read
                 continue
 
-            rel_path = py_file.relative_to(src)
+        return hasher.hexdigest()[:32]
+
+    def _copy_files(self, src: Path, dst: Path) -> None:
+        """Copy tracked files from src to dst, preserving structure."""
+        for f in self._get_file_list(src):
+            rel_path = f.relative_to(src)
             dst_file = dst / rel_path
             if dst_file.exists():
                 continue
             dst_file.parent.mkdir(parents=True, exist_ok=True)
             try:
-                shutil.copy2(py_file, dst_file)
+                shutil.copy2(f, dst_file)
             except PermissionError:
                 continue
+
+    def _prune_snapshots(self) -> None:
+        """Remove oldest snapshots beyond max_snapshots limit."""
+        if (
+            not self._snapshot_dir
+            or not self._snapshot_dir.exists()
+            or self._max_snapshots is None
+        ):
+            return
+
+        snapshots = sorted(
+            (
+                d
+                for d in self._snapshot_dir.iterdir()
+                if d.is_dir()
+            ),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+
+        for old in snapshots[self._max_snapshots :]:
+            # Don't prune snapshots that are in active use
+            if old.name not in self._snapshots:
+                shutil.rmtree(old, ignore_errors=True)
 
     def get_snapshot_path(self, snapshot_hash: str) -> Path | None:
         """Get the path to a snapshot by its hash."""
