@@ -305,6 +305,7 @@ class ForkExecutor(Executor):
             serialized_kwargs,
             self._capture,
             remapped_pythonpath,
+            self._checkpoint_path,
         )
 
         # Wrap the future

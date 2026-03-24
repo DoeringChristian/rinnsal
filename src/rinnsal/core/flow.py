@@ -271,16 +271,10 @@ class FlowResult:
 
             # Build set of all ordered hashes for tracking
             ordered_hashes = {e.hash for e in ordered}
-            ordered_map = {e.hash: e for e in ordered}
             completed: set[str] = set()
 
-            # In-flight futures for parallel execution
-            from concurrent.futures import Future
-
-            in_flight: dict[str, tuple[TaskExpression, Future]] = {}
-
             def _process_ready_tasks() -> None:
-                """Submit all ready tasks that can run now."""
+                """Process all tasks that are ready to run."""
                 nonlocal n_passed, n_cached, n_failed
 
                 ready = dag.get_ready_tasks(
@@ -296,8 +290,6 @@ class FlowResult:
                 for expr in ready:
                     if expr.hash not in ordered_hashes:
                         continue
-                    if expr.hash in in_flight:
-                        continue
                     if expr.hash in completed or expr.hash in failed_hashes:
                         continue
 
@@ -310,60 +302,13 @@ class FlowResult:
                         continue
 
                     if expr.hash in matched_hashes:
-                        # Execute fresh
+                        # Execute fresh — delegate to engine
                         progress.start(expr.task_name)
                         try:
-                            result, log, card = engine._execute_with_retry(
-                                expr,
-                                *engine._resolve_args(expr),
+                            engine.evaluate(expr)
+                            progress.complete(
+                                expr.task_name, cached=False
                             )
-                            expr.set_result(result)
-                            engine._evaluated[expr.hash] = result
-
-                            # Persist to database
-                            if database is not None:
-                                from datetime import datetime
-                                from rinnsal.core.types import Entry
-
-                                metadata: dict[str, Any] = {
-                                    "task_name": expr.task_name,
-                                    "func_name": expr.func.__name__,
-                                }
-                                if expr.task_def.resources:
-                                    metadata["resources"] = (
-                                        expr.task_def.resources.as_dict()
-                                    )
-                                if card:
-                                    metadata["card"] = card
-
-                                snapshot_obj = None
-                                try:
-                                    from rinnsal.core.snapshot import (
-                                        get_snapshot_manager,
-                                    )
-                                    from rinnsal.core.types import Snapshot
-
-                                    mgr = get_snapshot_manager()
-                                    sh, sp = mgr.create_snapshot(expr.func)
-                                    if sh:
-                                        snapshot_obj = Snapshot(
-                                            hash=sh, path=sp
-                                        )
-                                except Exception:
-                                    pass
-
-                                entry = Entry(
-                                    result=result,
-                                    log=log,
-                                    metadata=metadata,
-                                    timestamp=datetime.now(),
-                                    snapshot=snapshot_obj,
-                                )
-                                database.store_task_result(
-                                    expr.hash, entry, expr.task_name
-                                )
-
-                            progress.complete(expr.task_name, cached=False)
                             n_passed += 1
                             completed.add(expr.hash)
                         except Exception as e:
@@ -416,9 +361,6 @@ class FlowResult:
                     _process_ready_tasks()
                     new_total = len(completed) + len(failed_hashes)
                     if new_total == prev_total:
-                        # No progress — all remaining tasks have
-                        # unresolvable dependencies (shouldn't happen
-                        # with a valid DAG, but prevents infinite loop)
                         break
             except KeyboardInterrupt:
                 interrupted = True
