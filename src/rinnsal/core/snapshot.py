@@ -115,6 +115,12 @@ _SKIP_DIRS = frozenset(
     }
 )
 
+# Binary extensions that must NOT be copied into snapshots.
+# They are ABI-specific and must be loaded from the original install.
+_BINARY_EXTENSIONS = frozenset(
+    {".so", ".pyd", ".dylib", ".dll", ".a", ".lib"}
+)
+
 
 class SnapshotManager:
     """Manages code snapshots for task execution.
@@ -254,8 +260,18 @@ class SnapshotManager:
 
     @staticmethod
     def _should_skip(rel_path: Path) -> bool:
-        """Check if a relative path should be excluded from snapshots."""
-        return any(p in _SKIP_DIRS for p in rel_path.parts)
+        """Check if a relative path should be excluded from snapshots.
+
+        Excludes files in skip directories and binary extensions (.so,
+        .pyd, .dylib, etc.) which are ABI-specific and must be loaded
+        from the original install.
+        """
+        if any(p in _SKIP_DIRS for p in rel_path.parts):
+            return True
+        # Check all suffixes — handles .cpython-312-x86_64-linux-gnu.so
+        if any(s in _BINARY_EXTENSIONS for s in rel_path.suffixes):
+            return True
+        return False
 
     def _compute_hash(self, root: Path) -> str:
         """Compute a hash of all tracked files in the directory."""
