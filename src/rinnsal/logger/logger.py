@@ -110,6 +110,8 @@ class Logger:
                     self._write_figure(*args)
                 elif op == "checkpoint":
                     self._write_checkpoint(*args)
+                elif op == "card":
+                    self._write_card(*args)
             finally:
                 self._queue.task_done()
 
@@ -216,6 +218,33 @@ class Logger:
         ts = self._get_timestamp()
         self._queue.put(("checkpoint", (tag, obj, it, ts)))
 
+    def add_card(
+        self,
+        task: str,
+        kind: str,
+        title: str = "",
+        content: str = "",
+        image: bytes = b"",
+        it: int | None = None,
+    ) -> None:
+        """Log a card event (rich task output).
+
+        Card events are used to display rich content from task execution
+        in the viewer.
+
+        Args:
+            task: Name of the task that produced this card.
+            kind: Type of card content (text, image, table, html).
+            title: Optional title for the card item.
+            content: Text/HTML/markdown content.
+            image: PNG bytes for image cards.
+            it: Iteration number. If None, uses current iteration.
+        """
+        if it is None:
+            it = self._iteration
+        ts = self._get_timestamp()
+        self._queue.put(("card", (task, kind, title, content, image, it, ts)))
+
     def _write_scalar(
         self, tag: str, value: float, it: int, ts: float
     ) -> None:
@@ -287,6 +316,26 @@ class Logger:
         event.timestamp = ts
         event.iteration = it
         event.checkpoint.CopyFrom(Checkpoint(tag=tag, data=data))
+        self._event_writer.write(event)
+
+    def _write_card(
+        self,
+        task: str,
+        kind: str,
+        title: str,
+        content: str,
+        image: bytes,
+        it: int,
+        ts: float,
+    ) -> None:
+        from rinnsal.logger.events_pb2 import Card, Event
+
+        event = Event()
+        event.timestamp = ts
+        event.iteration = it
+        event.card.CopyFrom(
+            Card(task=task, kind=kind, title=title, content=content, image=image)
+        )
         self._event_writer.write(event)
 
     def __enter__(self) -> Logger:

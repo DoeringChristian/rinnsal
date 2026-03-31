@@ -1,7 +1,7 @@
 import { fromBinary } from "@bufbuild/protobuf";
 import { type Event, EventSchema } from "../proto/events_pb";
 
-export type { Event } from "../proto/events_pb";
+export type { Event, Card } from "../proto/events_pb";
 
 /**
  * Parse length-prefixed protobuf events from a binary buffer.
@@ -49,18 +49,33 @@ export function appendEvents(
 }
 
 /**
+ * Card event data
+ */
+export interface CardEvent {
+  iteration: bigint;
+  timestamp: number;
+  task: string;
+  kind: string;  // text, image, table, html
+  title: string;
+  content: string;
+  image: Uint8Array;
+}
+
+/**
  * Group events by type and tag.
  */
 export interface GroupedEvents {
   scalars: Map<string, { iteration: bigint; value: number; timestamp: number }[]>;
   text: Map<string, { iteration: bigint; value: string }[]>;
   figures: Map<string, { iteration: bigint; image: Uint8Array; data: Uint8Array; interactive: boolean }[]>;
+  cards: Map<string, CardEvent[]>;  // Grouped by task name
 }
 
 export function groupEvents(events: Event[]): GroupedEvents {
   const scalars = new Map<string, { iteration: bigint; value: number; timestamp: number }[]>();
   const text = new Map<string, { iteration: bigint; value: string }[]>();
   const figures = new Map<string, { iteration: bigint; image: Uint8Array; data: Uint8Array; interactive: boolean }[]>();
+  const cards = new Map<string, CardEvent[]>();
 
   for (const event of events) {
     const data = event.data;
@@ -94,6 +109,20 @@ export function groupEvents(events: Event[]): GroupedEvents {
         data: data.value.data,
         interactive: data.value.interactive,
       });
+    } else if (data.case === "card") {
+      const task = data.value.task;
+      if (!cards.has(task)) {
+        cards.set(task, []);
+      }
+      cards.get(task)!.push({
+        iteration: event.iteration,
+        timestamp: event.timestamp,
+        task: data.value.task,
+        kind: data.value.kind,
+        title: data.value.title,
+        content: data.value.content,
+        image: data.value.image,
+      });
     }
   }
 
@@ -107,6 +136,9 @@ export function groupEvents(events: Event[]): GroupedEvents {
   for (const arr of figures.values()) {
     arr.sort((a, b) => Number(a.iteration - b.iteration));
   }
+  for (const arr of cards.values()) {
+    arr.sort((a, b) => Number(a.iteration - b.iteration));
+  }
 
-  return { scalars, text, figures };
+  return { scalars, text, figures, cards };
 }

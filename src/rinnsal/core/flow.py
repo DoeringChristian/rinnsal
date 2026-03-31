@@ -171,6 +171,21 @@ class FlowResult:
         engine = self._get_or_create_engine()
         database = engine.database
 
+        # Create logger for this flow run
+        from datetime import datetime
+        from pathlib import Path
+        from rinnsal.context import current
+        from rinnsal.logger import Logger
+
+        db_path = Path(self._builtin_flags.get("db_path", ".rinnsal"))
+        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        run_dir = db_path / "flows" / self._flow_name / "runs" / run_id
+        run_dir.mkdir(parents=True, exist_ok=True)
+
+        logger = Logger(run_dir)
+        current._set_logger(logger)
+        logger.add_text("flow/info", f"Flow: {self._flow_name}")
+
         # Determine which tasks to execute vs load from cache
         if resume:
             if database is None:
@@ -304,6 +319,7 @@ class FlowResult:
                     if expr.hash in matched_hashes:
                         # Execute fresh — delegate to engine
                         progress.start(expr.task_name)
+                        current._set_task_name(expr.task_name)
                         try:
                             engine.evaluate(expr)
                             progress.complete(
@@ -311,11 +327,20 @@ class FlowResult:
                             )
                             n_passed += 1
                             completed.add(expr.hash)
+                            logger.add_text(
+                                f"task/{expr.task_name}/status", "completed"
+                            )
                         except Exception as e:
                             failed_hashes.add(expr.hash)
                             errors.append((expr.task_name, e))
                             progress.fail(expr.task_name)
                             n_failed += 1
+                            logger.add_text(
+                                f"task/{expr.task_name}/status",
+                                f"failed: {e}",
+                            )
+                        finally:
+                            current._set_task_name("")
                     elif expr.is_evaluated:
                         progress.complete(expr.task_name, cached=True)
                         n_cached += 1
@@ -423,6 +448,14 @@ class FlowResult:
 
             return self._return_value
         finally:
+            # Close logger
+            logger.add_text(
+                "flow/summary",
+                f"{n_passed} passed, {n_cached} cached, {n_failed} failed",
+            )
+            logger.close()
+            current._reset_logger()
+
             if not self._builtin_flags.get("_engine_preset"):
                 engine.shutdown(wait=not interrupted)
 

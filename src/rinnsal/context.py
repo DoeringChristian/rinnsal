@@ -19,12 +19,6 @@ class CardItem:
     title: str = ""
 
 
-def _render_image(figure: Any) -> str:
-    """Render a matplotlib figure to base64-encoded PNG."""
-    buf = io.BytesIO()
-    figure.savefig(buf, format="png", bbox_inches="tight")
-    buf.seek(0)
-    return base64.b64encode(buf.read()).decode("ascii")
 
 
 def _normalize_table(
@@ -42,25 +36,52 @@ def _normalize_table(
     return {"headers": headers, "rows": rows}
 
 
+def _render_image_bytes(figure: Any) -> bytes:
+    """Render a matplotlib figure to PNG bytes."""
+    buf = io.BytesIO()
+    figure.savefig(buf, format="png", bbox_inches="tight")
+    buf.seek(0)
+    return buf.read()
+
+
 class Card:
     """Collects rich content for a task card."""
 
     def __init__(self) -> None:
         self._items: list[CardItem] = []
 
+    def _log_to_logger(
+        self, kind: str, title: str, content: str = "", image: bytes = b""
+    ) -> None:
+        """Log card item to the current logger if available."""
+        # Import here to avoid circular import
+        logger = current.logger
+        if logger is not None:
+            task_name = current.task_name or "unknown"
+            logger.add_card(
+                task=task_name,
+                kind=kind,
+                title=title,
+                content=content,
+                image=image,
+            )
+
     def text(self, content: str, title: str = "") -> None:
         """Add a text/markdown block."""
         self._items.append(CardItem(kind="text", content=content, title=title))
+        self._log_to_logger("text", title, content=content)
 
     def image(self, figure: Any, title: str = "") -> None:
         """Add a matplotlib figure (rendered to PNG immediately)."""
-        self._items.append(
-            CardItem(kind="image", content=_render_image(figure), title=title)
-        )
+        png_bytes = _render_image_bytes(figure)
+        b64_content = base64.b64encode(png_bytes).decode("ascii")
+        self._items.append(CardItem(kind="image", content=b64_content, title=title))
+        self._log_to_logger("image", title, image=png_bytes)
 
     def html(self, content: str, title: str = "") -> None:
         """Add raw HTML content."""
         self._items.append(CardItem(kind="html", content=content, title=title))
+        self._log_to_logger("html", title, content=content)
 
     def table(
         self,
@@ -69,13 +90,17 @@ class Card:
         headers: list[str] | None = None,
     ) -> None:
         """Add a table (list-of-lists or pandas DataFrame)."""
+        table_data = _normalize_table(data, headers)
         self._items.append(
             CardItem(
                 kind="table",
-                content=_normalize_table(data, headers),
+                content=table_data,
                 title=title,
             )
         )
+        # Log table as markdown text
+        import json
+        self._log_to_logger("table", title, content=json.dumps(table_data))
 
     @property
     def items(self) -> list[CardItem]:
@@ -134,8 +159,9 @@ class Checkpoint:
 class _Current:
     """Context-aware object for accessing task execution context.
 
-    Provides ``current.card`` for rich content and
-    ``current.checkpoint`` for resumable execution.
+    Provides ``current.card`` for rich content,
+    ``current.checkpoint`` for resumable execution, and
+    ``current.logger`` for event logging.
     Uses ContextVar for thread/process safety.
     """
 
@@ -143,6 +169,8 @@ class _Current:
     _checkpoint_var: ContextVar[Checkpoint | None] = ContextVar(
         "_checkpoint_var", default=None
     )
+    _logger_var: ContextVar[Any] = ContextVar("_logger_var", default=None)
+    _task_name_var: ContextVar[str] = ContextVar("_task_name_var", default="")
 
     @property
     def card(self) -> Card:
@@ -162,6 +190,19 @@ class _Current:
             self._checkpoint_var.set(cp)
         return cp
 
+    @property
+    def logger(self) -> Any:
+        """Get the logger for the current flow execution.
+
+        Returns None if no logger is active.
+        """
+        return self._logger_var.get(None)
+
+    @property
+    def task_name(self) -> str:
+        """Get the name of the currently executing task."""
+        return self._task_name_var.get("")
+
     def _set_card(self, card: Card) -> None:
         """Set the card for the current task (called by executors)."""
         self._card_var.set(card)
@@ -169,6 +210,14 @@ class _Current:
     def _set_checkpoint(self, checkpoint: Checkpoint) -> None:
         """Set the checkpoint for the current task (called by executors)."""
         self._checkpoint_var.set(checkpoint)
+
+    def _set_logger(self, logger: Any) -> None:
+        """Set the logger for the current flow (called by flow.run)."""
+        self._logger_var.set(logger)
+
+    def _set_task_name(self, name: str) -> None:
+        """Set the current task name (called by executors)."""
+        self._task_name_var.set(name)
 
     def _reset(self) -> Card | None:
         """Harvest and clear the card (called by executors after task completes).
@@ -185,6 +234,10 @@ class _Current:
     def _reset_checkpoint(self) -> None:
         """Clear the checkpoint context (called after all retries complete)."""
         self._checkpoint_var.set(None)
+
+    def _reset_logger(self) -> None:
+        """Clear the logger context (called after flow completes)."""
+        self._logger_var.set(None)
 
 
 current = _Current()

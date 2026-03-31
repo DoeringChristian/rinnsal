@@ -3,10 +3,11 @@ import RunSelector from "./components/RunSelector";
 import ScalarChart from "./components/ScalarChart";
 import TextLog from "./components/TextLog";
 import FigureViewer from "./components/FigureViewer";
+import CardViewer from "./components/CardViewer";
 import { useEvents } from "./hooks/useEvents";
 import { fetchConfig } from "./lib/api";
 
-type Tab = "scalars" | "text" | "figures";
+type Tab = "scalars" | "text" | "figures" | "cards";
 
 export default function App() {
   const [rootDir, setRootDir] = useState("");
@@ -61,7 +62,7 @@ export default function App() {
         {/* Tabs */}
         <nav className="bg-white border-b border-gray-200 px-4">
           <div className="flex space-x-4">
-            {(["scalars", "text", "figures"] as Tab[]).map((tab) => (
+            {(["scalars", "text", "figures", "cards"] as Tab[]).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setActiveTab(tab)}
@@ -95,6 +96,9 @@ export default function App() {
               )}
               {activeTab === "figures" && (
                 <FigureViewer events={events} selectedRuns={selectedRuns} />
+              )}
+              {activeTab === "cards" && (
+                <CardViewer events={events} selectedRuns={selectedRuns} />
               )}
             </>
           )}

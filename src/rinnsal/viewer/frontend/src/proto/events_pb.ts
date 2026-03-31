@@ -15,7 +15,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file events.proto.
  */
 export const file_events: GenFile = /*@__PURE__*/
-  fileDesc("CgxldmVudHMucHJvdG8SB3Jpbm5zYWwixQEKBUV2ZW50EhEKCXRpbWVzdGFtcBgBIAEoARIRCglpdGVyYXRpb24YAiABKAMSIQoGc2NhbGFyGAMgASgLMg8ucmlubnNhbC5TY2FsYXJIABIdCgR0ZXh0GAQgASgLMg0ucmlubnNhbC5UZXh0SAASIQoGZmlndXJlGAUgASgLMg8ucmlubnNhbC5GaWd1cmVIABIpCgpjaGVja3BvaW50GAYgASgLMhMucmlubnNhbC5DaGVja3BvaW50SABCBgoEZGF0YSIkCgZTY2FsYXISCwoDdGFnGAEgASgJEg0KBXZhbHVlGAIgASgBIiIKBFRleHQSCwoDdGFnGAEgASgJEg0KBXZhbHVlGAIgASgJIkcKBkZpZ3VyZRILCgN0YWcYASABKAkSEwoLaW50ZXJhY3RpdmUYAiABKAgSDQoFaW1hZ2UYAyABKAwSDAoEZGF0YRgEIAEoDCInCgpDaGVja3BvaW50EgsKA3RhZxgBIAEoCRIMCgRkYXRhGAIgASgMYgZwcm90bzM");
+  fileDesc("CgxldmVudHMucHJvdG8SB3Jpbm5zYWwi5AEKBUV2ZW50EhEKCXRpbWVzdGFtcBgBIAEoARIRCglpdGVyYXRpb24YAiABKAMSIQoGc2NhbGFyGAMgASgLMg8ucmlubnNhbC5TY2FsYXJIABIdCgR0ZXh0GAQgASgLMg0ucmlubnNhbC5UZXh0SAASIQoGZmlndXJlGAUgASgLMg8ucmlubnNhbC5GaWd1cmVIABIpCgpjaGVja3BvaW50GAYgASgLMhMucmlubnNhbC5DaGVja3BvaW50SAASHQoEY2FyZBgHIAEoCzINLnJpbm5zYWwuQ2FyZEgAQgYKBGRhdGEiJAoGU2NhbGFyEgsKA3RhZxgBIAEoCRINCgV2YWx1ZRgCIAEoASIiCgRUZXh0EgsKA3RhZxgBIAEoCRINCgV2YWx1ZRgCIAEoCSJHCgZGaWd1cmUSCwoDdGFnGAEgASgJEhMKC2ludGVyYWN0aXZlGAIgASgIEg0KBWltYWdlGAMgASgMEgwKBGRhdGEYBCABKAwiJwoKQ2hlY2twb2ludBILCgN0YWcYASABKAkSDAoEZGF0YRgCIAEoDCJRCgRDYXJkEgwKBHRhc2sYASABKAkSDAoEa2luZBgCIAEoCRINCgV0aXRsZRgDIAEoCRIPCgdjb250ZW50GAQgASgJEg0KBWltYWdlGAUgASgMYgZwcm90bzM");
 
 /**
  * @generated from message rinnsal.Event
@@ -58,6 +58,12 @@ export type Event = Message<"rinnsal.Event"> & {
      */
     value: Checkpoint;
     case: "checkpoint";
+  } | {
+    /**
+     * @generated from field: rinnsal.Card card = 7;
+     */
+    value: Card;
+    case: "card";
   } | { case: undefined; value?: undefined };
 };
 
@@ -169,4 +175,51 @@ export type Checkpoint = Message<"rinnsal.Checkpoint"> & {
  */
 export const CheckpointSchema: GenMessage<Checkpoint> = /*@__PURE__*/
   messageDesc(file_events, 4);
+
+/**
+ * @generated from message rinnsal.Card
+ */
+export type Card = Message<"rinnsal.Card"> & {
+  /**
+   * Task name that produced this card
+   *
+   * @generated from field: string task = 1;
+   */
+  task: string;
+
+  /**
+   * text, image, table, html
+   *
+   * @generated from field: string kind = 2;
+   */
+  kind: string;
+
+  /**
+   * Optional title
+   *
+   * @generated from field: string title = 3;
+   */
+  title: string;
+
+  /**
+   * Text/HTML/markdown content
+   *
+   * @generated from field: string content = 4;
+   */
+  content: string;
+
+  /**
+   * PNG bytes for image cards
+   *
+   * @generated from field: bytes image = 5;
+   */
+  image: Uint8Array;
+};
+
+/**
+ * Describes the message rinnsal.Card.
+ * Use `create(CardSchema)` to create a new message.
+ */
+export const CardSchema: GenMessage<Card> = /*@__PURE__*/
+  messageDesc(file_events, 5);
 

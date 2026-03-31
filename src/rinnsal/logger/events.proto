@@ -16,6 +16,7 @@ message Event {
     Text text = 4;
     Figure figure = 5;
     Checkpoint checkpoint = 6;
+    Card card = 7;
   }
 }
 
@@ -39,4 +40,12 @@ message Figure {
 message Checkpoint {
   string tag = 1;
   bytes data = 2;
+}
+
+message Card {
+  string task = 1;           // Task name that produced this card
+  string kind = 2;           // text, image, table, html
+  string title = 3;          // Optional title
+  string content = 4;        // Text/HTML/markdown content
+  bytes image = 5;           // PNG bytes for image cards
 }
