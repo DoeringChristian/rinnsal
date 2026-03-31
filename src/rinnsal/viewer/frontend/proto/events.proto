@@ -1,0 +1,42 @@
+// Protocol buffer schema for rinnsal event logging.
+//
+// To regenerate events_pb2.py:
+//   python -m grpc_tools.protoc --python_out=. -I. events.proto
+
+syntax = "proto3";
+
+package rinnsal;
+
+message Event {
+  double timestamp = 1;
+  int64 iteration = 2;
+
+  oneof data {
+    Scalar scalar = 3;
+    Text text = 4;
+    Figure figure = 5;
+    Checkpoint checkpoint = 6;
+  }
+}
+
+message Scalar {
+  string tag = 1;
+  double value = 2;
+}
+
+message Text {
+  string tag = 1;
+  string value = 2;
+}
+
+message Figure {
+  string tag = 1;
+  bool interactive = 2;
+  bytes image = 3;   // PNG bytes (non-interactive)
+  bytes data = 4;    // cloudpickle bytes (interactive)
+}
+
+message Checkpoint {
+  string tag = 1;
+  bytes data = 2;
+}

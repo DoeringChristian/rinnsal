@@ -261,15 +261,16 @@ class Logger:
         event.timestamp = ts
         event.iteration = it
 
+        # Always render PNG for display
+        image = self._render_to_png(figure)
+
         if interactive:
-            # Store pickled figure for full interactivity
+            # Also store pickled figure for potential future interactivity
             data = cloudpickle.dumps(figure)
             event.figure.CopyFrom(
-                Figure(tag=tag, interactive=True, data=data)
+                Figure(tag=tag, interactive=True, image=image, data=data)
             )
         else:
-            # Store PNG for instant display
-            image = self._render_to_png(figure)
             event.figure.CopyFrom(
                 Figure(tag=tag, interactive=False, image=image)
             )

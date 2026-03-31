@@ -10,10 +10,8 @@ dependencies = ["cloudpickle>=3.0", "pyyaml>=6.0", "protobuf>=4.0"]
 ssh = ["asyncssh>=2.14"]
 ray = ["ray>=2.9"]
 viewer = [
-    "solara[server]>=1.0",
-    "matplotlib>=3.0",
-    "bqplot>=0.12",
-    "anywidget>=0.9",
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.20",
 ]
 all = ["rinnsal[ssh,ray,viewer]"]
 

@@ -358,6 +358,93 @@ def set_snapshot_manager(manager: SnapshotManager) -> None:
     _snapshot_manager = manager
 
 
+def run_in_snapshot(
+    func: Callable[..., Any],
+    *args: Any,
+    hash: str | None = None,
+    flow: str | None = None,
+    db_path: str = ".rinnsal",
+    **kwargs: Any,
+) -> Any:
+    """Run a function in a subprocess using snapshot code.
+
+    Unlike use_snapshot(), this spawns a fresh Python process,
+    avoiding conflicts with already-loaded native extensions (.so/.pyd).
+    Use this when your code depends on native extensions that may have
+    been imported before the snapshot context.
+
+    Args:
+        func: Function to execute (must be picklable via cloudpickle/dill)
+        *args: Positional arguments (must be picklable)
+        hash: Snapshot hash to use directly
+        flow: Flow name — uses the snapshot from its latest run
+        db_path: Path to the .rinnsal database directory
+        **kwargs: Keyword arguments (must be picklable)
+
+    Returns:
+        The function's return value (must be picklable)
+
+    Raises:
+        ValueError: If snapshot not found
+        RuntimeError: If subprocess execution fails
+
+    Examples:
+        def load_model(checkpoint_path):
+            from my_module import Model
+            return Model.load(checkpoint_path)
+
+        model = run_in_snapshot(load_model, "model.pt", flow="training")
+    """
+    import pickle
+
+    _, snapshot_path = _resolve_snapshot_hash(hash, flow, db_path)
+
+    # Build environment with remapped PYTHONPATH
+    env = os.environ.copy()
+    env["PYTHONPATH"] = build_pythonpath(snapshot_path)
+
+    # Serialize function and arguments
+    payload = pickle.dumps((func, args, kwargs))
+
+    # Python code to execute in subprocess
+    worker_code = """
+import sys
+import pickle
+
+# Read payload from stdin
+payload = sys.stdin.buffer.read()
+func, args, kwargs = pickle.loads(payload)
+
+# Execute and write result to stdout
+try:
+    result = func(*args, **kwargs)
+    sys.stdout.buffer.write(pickle.dumps(("ok", result)))
+except Exception as e:
+    import traceback
+    sys.stdout.buffer.write(pickle.dumps(("error", str(e), traceback.format_exc())))
+"""
+
+    # Run in subprocess
+    result = _subprocess.run(
+        [sys.executable, "-c", worker_code],
+        input=payload,
+        capture_output=True,
+        env=env,
+    )
+
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace")
+        raise RuntimeError(f"Subprocess failed:\n{stderr}")
+
+    # Deserialize result
+    status, *data = pickle.loads(result.stdout)
+    if status == "ok":
+        return data[0]
+    else:
+        error_msg, tb = data
+        raise RuntimeError(f"Function raised exception:\n{tb}")
+
+
 def _invalidate_project_modules(snapshot_path: Path | None) -> None:
     """Remove project-local modules from sys.modules.
 
@@ -387,6 +474,10 @@ def _invalidate_project_modules(snapshot_path: Path | None) -> None:
             continue
         mod_file = getattr(mod, "__file__", None)
         if mod_file is None:
+            continue
+        # Skip binary extensions - they aren't copied to snapshots
+        # and can't be safely reimported once loaded
+        if any(mod_file.endswith(ext) for ext in _BINARY_EXTENSIONS):
             continue
         resolved = str(Path(mod_file).resolve())
         if any(resolved.startswith(p) for p in prefixes):
@@ -442,6 +533,16 @@ def use_snapshot(
     allowing you to run code using the exact module versions from a
     previous execution.
 
+    Warning:
+        This context manager manipulates sys.path and sys.modules in-place.
+        It does NOT work correctly if native extensions (.so/.pyd) from the
+        project tree have already been imported before entering the context.
+        Native extensions cannot be reloaded in a running Python process.
+
+        If your code uses native extensions (e.g., DrJit, Mitsuba, PyTorch
+        C++ extensions built locally), use ``run_in_snapshot()`` instead,
+        which executes in a fresh subprocess.
+
     Args:
         hash: Snapshot hash to use directly
         flow: Flow name — uses the snapshot from its latest run
@@ -458,6 +559,9 @@ def use_snapshot(
         with use_snapshot(hash="abc123def456"):
             import my_module
             my_module.inspect(data)
+
+    See Also:
+        run_in_snapshot: Subprocess-based alternative for native extensions.
     """
     _, snapshot_path = _resolve_snapshot_hash(hash, flow, db_path)
 
