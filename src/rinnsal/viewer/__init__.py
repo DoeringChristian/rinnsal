@@ -1,7 +1,9 @@
 """Rinnsal log viewer - a web-based experiment dashboard.
 
 Install with: pip install rinnsal[viewer]
-Run with: rinnsal-viewer /path/to/runs
+Run with: python -m rinnsal.viewer
+
+By default, looks for runs in .rinnsal/ in the current directory.
 """
 
 from __future__ import annotations
@@ -121,8 +123,8 @@ def main() -> None:
     parser.add_argument(
         "log_dir",
         nargs="?",
-        default=None,
-        help="Log directory to view",
+        default=".rinnsal",
+        help="Log directory to view (default: .rinnsal)",
     )
     parser.add_argument(
         "--port",

@@ -18,7 +18,7 @@ Usage:
     python examples/17_logger_in_tasks.py --executor inline
 
 Then view the logs:
-    python -m rinnsal.viewer .rinnsal
+    python -m rinnsal.viewer
 """
 
 import matplotlib.pyplot as plt
@@ -112,7 +112,7 @@ if __name__ == "__main__":
 
     print(f"\nFinal result: {final.result}")
     print("\nLogs saved to .rinnsal/flows/training_pipeline/runs/")
-    print("View with: python -m rinnsal.viewer .rinnsal")
+    print("View with: python -m rinnsal.viewer")
     print("\nIn the viewer you can see:")
     print("  - Scalars tab: train/loss, train/accuracy, eval/loss, eval/accuracy")
     print("  - Text tab: config, status, eval/result")

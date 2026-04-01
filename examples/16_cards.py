@@ -15,7 +15,7 @@ Usage:
     python examples/16_cards.py
 
 Then view the cards in the web viewer:
-    python -m rinnsal.viewer .rinnsal
+    python -m rinnsal.viewer
 """
 
 from rinnsal import task, flow, current
@@ -105,4 +105,4 @@ if __name__ == "__main__":
     # Cards are automatically logged to events.pb during flow execution.
     # View them in the web viewer:
     print("\nCards logged to .rinnsal/flows/experiment/runs/")
-    print("View with: python -m rinnsal.viewer .rinnsal")
+    print("View with: python -m rinnsal.viewer")

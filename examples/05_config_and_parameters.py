@@ -56,4 +56,4 @@ if __name__ == "__main__":
     print(f"Override: {r2.result}")
 
     # View cards in the web viewer
-    print("\nView cards with: python -m rinnsal.viewer .rinnsal")
+    print("\nView cards with: python -m rinnsal.viewer")
