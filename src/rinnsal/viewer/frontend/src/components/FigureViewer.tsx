@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { GroupedEvents } from "../lib/events";
 import { getRunColor } from "./RunSelector";
+import { CollapsibleSection } from "./CollapsibleSection";
 
 interface FigureViewerProps {
   events: Map<string, GroupedEvents>;
@@ -30,12 +31,13 @@ export default function FigureViewer({ events, selectedRuns }: FigureViewerProps
   return (
     <div className="space-y-6">
       {allTags.map((tag) => (
-        <FigureTagSection
-          key={tag}
-          tag={tag}
-          events={events}
-          selectedRuns={selectedRuns}
-        />
+        <CollapsibleSection key={tag} title={tag}>
+          <FigureTagSection
+            tag={tag}
+            events={events}
+            selectedRuns={selectedRuns}
+          />
+        </CollapsibleSection>
       ))}
     </div>
   );
@@ -49,26 +51,23 @@ interface FigureTagSectionProps {
 
 function FigureTagSection({ tag, events, selectedRuns }: FigureTagSectionProps) {
   return (
-    <div className="space-y-4">
-      <h3 className="text-lg font-semibold text-gray-800">{tag}</h3>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {selectedRuns.map((run) => {
-          const grouped = events.get(run);
-          if (!grouped) return null;
+    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      {selectedRuns.map((run) => {
+        const grouped = events.get(run);
+        if (!grouped) return null;
 
-          const figures = grouped.figures.get(tag);
-          if (!figures || figures.length === 0) return null;
+        const figures = grouped.figures.get(tag);
+        if (!figures || figures.length === 0) return null;
 
-          return (
-            <FigureRunCard
-              key={run}
-              run={run}
-              figures={figures}
-              color={getRunColor(run, selectedRuns)}
-            />
-          );
-        })}
-      </div>
+        return (
+          <FigureRunCard
+            key={run}
+            run={run}
+            figures={figures}
+            color={getRunColor(run)}
+          />
+        );
+      })}
     </div>
   );
 }

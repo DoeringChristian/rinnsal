@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { GroupedEvents } from "../lib/events";
 import { getRunColor } from "./RunSelector";
+import { CollapsibleSection } from "./CollapsibleSection";
 
 interface TextLogProps {
   events: Map<string, GroupedEvents>;
@@ -30,12 +31,13 @@ export default function TextLog({ events, selectedRuns }: TextLogProps) {
   return (
     <div className="space-y-6">
       {allTags.map((tag) => (
-        <TextTagSection
-          key={tag}
-          tag={tag}
-          events={events}
-          selectedRuns={selectedRuns}
-        />
+        <CollapsibleSection key={tag} title={tag}>
+          <TextTagSection
+            tag={tag}
+            events={events}
+            selectedRuns={selectedRuns}
+          />
+        </CollapsibleSection>
       ))}
     </div>
   );
@@ -50,7 +52,6 @@ interface TextTagSectionProps {
 function TextTagSection({ tag, events, selectedRuns }: TextTagSectionProps) {
   return (
     <div className="space-y-4">
-      <h3 className="text-lg font-semibold text-gray-800">{tag}</h3>
       {selectedRuns.map((run) => {
         const grouped = events.get(run);
         if (!grouped) return null;
@@ -63,7 +64,7 @@ function TextTagSection({ tag, events, selectedRuns }: TextTagSectionProps) {
             key={run}
             run={run}
             texts={texts}
-            color={getRunColor(run, selectedRuns)}
+            color={getRunColor(run)}
           />
         );
       })}

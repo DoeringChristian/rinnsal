@@ -3,6 +3,7 @@ import UplotReact from "uplot-react";
 import "uplot/dist/uPlot.min.css";
 import { GroupedEvents } from "../lib/events";
 import { getRunColor } from "./RunSelector";
+import { CollapsibleSection } from "./CollapsibleSection";
 
 interface ScalarChartProps {
   events: Map<string, GroupedEvents>;
@@ -10,9 +11,6 @@ interface ScalarChartProps {
 }
 
 export default function ScalarChart({ events, selectedRuns }: ScalarChartProps) {
-  const [logScale, setLogScale] = useState(false);
-  const [relativeTime, setRelativeTime] = useState(false);
-
   // Collect all scalar tags across all runs
   const allTags = useMemo(() => {
     const tags = new Set<string>();
@@ -34,40 +32,14 @@ export default function ScalarChart({ events, selectedRuns }: ScalarChartProps) 
 
   return (
     <div className="space-y-6">
-      {/* Controls */}
-      <div className="flex items-center space-x-4">
-        <button
-          onClick={() => setLogScale(!logScale)}
-          className={`px-3 py-1.5 text-sm rounded-md border transition-colors ${
-            logScale
-              ? "bg-blue-100 border-blue-300 text-blue-700"
-              : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
-          }`}
-        >
-          {logScale ? "Linear Y" : "Log Y"}
-        </button>
-        <button
-          onClick={() => setRelativeTime(!relativeTime)}
-          className={`px-3 py-1.5 text-sm rounded-md border transition-colors ${
-            relativeTime
-              ? "bg-blue-100 border-blue-300 text-blue-700"
-              : "bg-white border-gray-300 text-gray-700 hover:bg-gray-50"
-          }`}
-        >
-          {relativeTime ? "Iteration" : "Rel. Time"}
-        </button>
-      </div>
-
-      {/* Charts */}
       {allTags.map((tag) => (
-        <ScalarTagChart
-          key={tag}
-          tag={tag}
-          events={events}
-          selectedRuns={selectedRuns}
-          logScale={logScale}
-          relativeTime={relativeTime}
-        />
+        <CollapsibleSection key={tag} title={tag}>
+          <ScalarTagChart
+            tag={tag}
+            events={events}
+            selectedRuns={selectedRuns}
+          />
+        </CollapsibleSection>
       ))}
     </div>
   );
@@ -77,17 +49,16 @@ interface ScalarTagChartProps {
   tag: string;
   events: Map<string, GroupedEvents>;
   selectedRuns: string[];
-  logScale: boolean;
-  relativeTime: boolean;
 }
 
 function ScalarTagChart({
   tag,
   events,
   selectedRuns,
-  logScale,
-  relativeTime,
 }: ScalarTagChartProps) {
+  const [logScale, setLogScale] = useState(false);
+  const [relativeTime, setRelativeTime] = useState(false);
+
   const { data, opts } = useMemo(() => {
     // Collect data for each run
     const runData: { run: string; x: number[]; y: number[] }[] = [];
@@ -151,7 +122,7 @@ function ScalarTagChart({
       { label: relativeTime ? "Time (s)" : "Iteration" },
       ...runData.map((rd) => ({
         label: rd.run.split("/").pop() || rd.run,
-        stroke: getRunColor(rd.run, selectedRuns),
+        stroke: getRunColor(rd.run),
         width: 2,
         spanGaps: true,
       })),
@@ -161,7 +132,6 @@ function ScalarTagChart({
     const opts: uPlot.Options = {
       width: 800,
       height: 300,
-      title: tag,
       scales: {
         y: {
           distr: logScale ? 3 : 1, // 3 = log
@@ -171,6 +141,9 @@ function ScalarTagChart({
         {
           label: relativeTime ? "Time (s)" : "Iteration",
           grid: { show: true, stroke: "#eee" },
+          values: relativeTime
+            ? (_u, vals) => vals.map((v) => v.toFixed(1))
+            : (_u, vals) => vals.map((v) => String(Math.round(v))),
         },
         {
           label: "Value",
@@ -208,6 +181,28 @@ function ScalarTagChart({
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 p-4">
+      <div className="flex items-center justify-end space-x-2 mb-2">
+        <button
+          onClick={() => setLogScale(!logScale)}
+          className={`px-2 py-1 text-xs rounded border transition-colors ${
+            logScale
+              ? "bg-blue-100 border-blue-300 text-blue-700"
+              : "bg-white border-gray-300 text-gray-600 hover:bg-gray-50"
+          }`}
+        >
+          {logScale ? "Linear Y" : "Log Y"}
+        </button>
+        <button
+          onClick={() => setRelativeTime(!relativeTime)}
+          className={`px-2 py-1 text-xs rounded border transition-colors ${
+            relativeTime
+              ? "bg-blue-100 border-blue-300 text-blue-700"
+              : "bg-white border-gray-300 text-gray-600 hover:bg-gray-50"
+          }`}
+        >
+          {relativeTime ? "Iteration" : "Rel. Time"}
+        </button>
+      </div>
       <UplotReact options={opts} data={data as uPlot.AlignedData} />
     </div>
   );

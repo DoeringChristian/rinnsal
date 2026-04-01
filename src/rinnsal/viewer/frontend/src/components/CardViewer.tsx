@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { GroupedEvents, CardEvent } from "../lib/events";
 import { getRunColor } from "./RunSelector";
+import { CollapsibleSection } from "./CollapsibleSection";
 
 interface CardViewerProps {
   events: Map<string, GroupedEvents>;
@@ -30,12 +31,13 @@ export default function CardViewer({ events, selectedRuns }: CardViewerProps) {
   return (
     <div className="space-y-6">
       {allTasks.map((task) => (
-        <TaskCardSection
-          key={task}
-          task={task}
-          events={events}
-          selectedRuns={selectedRuns}
-        />
+        <CollapsibleSection key={task} title={task}>
+          <TaskCardSection
+            task={task}
+            events={events}
+            selectedRuns={selectedRuns}
+          />
+        </CollapsibleSection>
       ))}
     </div>
   );
@@ -49,26 +51,23 @@ interface TaskCardSectionProps {
 
 function TaskCardSection({ task, events, selectedRuns }: TaskCardSectionProps) {
   return (
-    <div className="space-y-4">
-      <h3 className="text-lg font-semibold text-gray-800">{task}</h3>
-      <div className="grid grid-cols-1 gap-4">
-        {selectedRuns.map((run) => {
-          const grouped = events.get(run);
-          if (!grouped) return null;
+    <div className="grid grid-cols-1 gap-4">
+      {selectedRuns.map((run) => {
+        const grouped = events.get(run);
+        if (!grouped) return null;
 
-          const cards = grouped.cards.get(task);
-          if (!cards || cards.length === 0) return null;
+        const cards = grouped.cards.get(task);
+        if (!cards || cards.length === 0) return null;
 
-          return (
-            <TaskRunCard
-              key={run}
-              run={run}
-              cards={cards}
-              color={getRunColor(run, selectedRuns)}
-            />
-          );
-        })}
-      </div>
+        return (
+          <TaskRunCard
+            key={run}
+            run={run}
+            cards={cards}
+            color={getRunColor(run)}
+          />
+        );
+      })}
     </div>
   );
 }

@@ -18,9 +18,18 @@ const RUN_COLORS = [
   "#7f7f7f",
 ];
 
-export function getRunColor(run: string, selectedRuns: string[]): string {
-  const idx = selectedRuns.indexOf(run);
-  return idx >= 0 ? RUN_COLORS[idx % RUN_COLORS.length] : "#666";
+function hashString(str: string): number {
+  let hash = 0;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) - hash) + str.charCodeAt(i);
+    hash |= 0;
+  }
+  return Math.abs(hash);
+}
+
+export function getRunColor(run: string): string {
+  const idx = hashString(run);
+  return RUN_COLORS[idx % RUN_COLORS.length];
 }
 
 export default function RunSelector({
@@ -105,7 +114,7 @@ export default function RunSelector({
       <div className="space-y-1">
         {filteredRuns.map((run) => {
           const isSelected = selectedRuns.includes(run.path);
-          const color = getRunColor(run.path, selectedRuns);
+          const color = getRunColor(run.path);
 
           return (
             <label
