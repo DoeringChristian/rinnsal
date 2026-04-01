@@ -255,6 +255,43 @@ class ExecutionEngine:
                         str(result.error),
                     )
 
+            # Log cards to current.logger (set by flow.run)
+            if result.success and result.card:
+                from rinnsal.context import current as _ctx
+                ctx_logger = _ctx.logger
+                if ctx_logger is not None:
+                    import base64
+                    import json
+                    for card_item in result.card:
+                        kind = card_item.get("kind", "text")
+                        title = card_item.get("title", "")
+                        content = card_item.get("content", "")
+                        image = b""
+
+                        # Handle different content types
+                        if kind == "image":
+                            # Content is base64-encoded PNG
+                            if isinstance(content, str):
+                                try:
+                                    image = base64.b64decode(content)
+                                except Exception:
+                                    pass
+                            content = ""
+                        elif kind == "table":
+                            # Content is a dict, serialize to JSON
+                            if isinstance(content, dict):
+                                content = json.dumps(content)
+                        elif not isinstance(content, str):
+                            content = str(content)
+
+                        ctx_logger.add_card(
+                            task=expr.task_name,
+                            kind=kind,
+                            title=title,
+                            content=content,
+                            image=image,
+                        )
+
             if result.success:
                 return result.value, combined_log, result.card
 

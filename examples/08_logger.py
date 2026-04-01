@@ -1,8 +1,12 @@
 """Example: Using the Logger for experiment tracking.
 
 The Logger provides TensorBoard-like experiment tracking with support for
-scalars, text, figures, and checkpoints. Data is stored in protobuf format
-by default for efficient storage and fast reads.
+scalars, text, figures, checkpoints, and cards. Data is stored in protobuf
+format for efficient storage and fast reads.
+
+When running flows, a logger is automatically created and cards logged via
+``current.card`` are written to the events.pb file. This example shows
+standalone logger usage; see 16_cards.py for flow integration.
 """
 
 import math
@@ -72,6 +76,28 @@ def train_loop(logger: rs.Logger, epochs: int = 10) -> dict:
 
             logger.add_figure("loss_landscape_3d", fig, interactive=True)
             plt.close(fig)
+
+    # Log cards (rich content for task-like output)
+    # Cards support text, image, table, and html content
+    logger.add_card(
+        task="train",
+        kind="text",
+        title="Summary",
+        content=f"Training completed with final loss={loss:.4f}, accuracy={accuracy:.4f}",
+    )
+
+    # Log a table as a card (content is JSON-serialized table data)
+    import json
+    table_data = {
+        "headers": ["Metric", "Value"],
+        "rows": [["Loss", f"{loss:.4f}"], ["Accuracy", f"{accuracy:.4f}"]],
+    }
+    logger.add_card(
+        task="train",
+        kind="table",
+        title="Final Metrics",
+        content=json.dumps(table_data),
+    )
 
     return {"final_loss": loss, "final_accuracy": accuracy}
 

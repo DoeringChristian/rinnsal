@@ -1,40 +1,65 @@
 #!/usr/bin/env python3
 """Cards - attach rich content to task results.
 
-Tasks can add text, HTML, and tables to a card via
-``current.card``. Card data is stored in the Entry metadata
-and viewable in the web UI.
+Tasks can add text, HTML, images, and tables to a card via
+``current.card``. When running flows, card events are automatically
+logged to the run's events.pb file and are viewable in the web viewer.
+
+Card types:
+- ``current.card.text(content, title="")`` - Markdown/text content
+- ``current.card.html(content, title="")`` - Raw HTML content
+- ``current.card.table(data, title="", headers=None)`` - Tables from lists or DataFrames
+- ``current.card.image(figure, title="")`` - Matplotlib figures
 
 Usage:
+    python examples/16_cards.py
 
-    python examples/16_cards.py -s
+Then view the cards in the web viewer:
+    python -m rinnsal.viewer .rinnsal
 """
 
 from rinnsal import task, flow, current
-from rinnsal.persistence.file_store import FileDatabase
-from rinnsal.execution.inline import InlineExecutor
-from rinnsal.runtime.engine import ExecutionEngine, set_engine
+
+import matplotlib.pyplot as plt
 
 
 @task
 def train(lr: float = 0.01, epochs: int = 5):
     """Train a model and record metrics on its card."""
     metrics = []
+    losses = []
+    accs = []
     for epoch in range(epochs):
         loss = 1.0 / (epoch + 1 + lr * 10)
         acc = 1.0 - loss
         metrics.append([epoch + 1, f"{loss:.4f}", f"{acc:.4f}"])
+        losses.append(loss)
+        accs.append(acc)
 
-    # Add card content
+    # Add text card
     current.card.text(f"Trained for {epochs} epochs with lr={lr}")
+
+    # Add table card
     current.card.table(
         metrics,
         title="Training Metrics",
         headers=["Epoch", "Loss", "Accuracy"],
     )
-    current.card.html(
-        f"<p>Final accuracy: <b>{metrics[-1][2]}</b></p>"
-    )
+
+    # Add image card (matplotlib figure)
+    fig, ax = plt.subplots(figsize=(6, 4))
+    ax.plot(range(1, epochs + 1), losses, label="Loss", marker="o")
+    ax.plot(range(1, epochs + 1), accs, label="Accuracy", marker="s")
+    ax.set_xlabel("Epoch")
+    ax.set_ylabel("Value")
+    ax.set_title(f"Training Progress (lr={lr})")
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+    current.card.image(fig, title="Training Curves")
+    plt.close(fig)
+
+    # Add HTML card
+    current.card.html(f"<p>Final accuracy: <b>{metrics[-1][2]}</b></p>")
 
     return {"loss": float(metrics[-1][1]), "accuracy": float(metrics[-1][2])}
 
@@ -43,7 +68,11 @@ def train(lr: float = 0.01, epochs: int = 5):
 def compare(results):
     """Compare multiple training runs."""
     rows = [
-        [r["lr"], f"{r['result']['loss']:.4f}", f"{r['result']['accuracy']:.4f}"]
+        [
+            r["lr"],
+            f"{r['result']['loss']:.4f}",
+            f"{r['result']['accuracy']:.4f}",
+        ]
         for r in results
     ]
     current.card.text("## Comparison of training runs")
@@ -67,16 +96,13 @@ def experiment():
 
 
 if __name__ == "__main__":
-    db = FileDatabase(root=".rinnsal")
-    executor = InlineExecutor()
-    set_engine(ExecutionEngine(executor=executor, database=db))
-
     result = experiment()
     result.run()
 
     for t in result:
         print(f"{t.task_name}: {t.result}")
 
-    # Card data is stored in .rinnsal and viewable with:
-    #   python -m rinnsal.viewer .rinnsal
-    print("\nCard data stored. View with: python -m rinnsal.viewer")
+    # Cards are automatically logged to events.pb during flow execution.
+    # View them in the web viewer:
+    print("\nCards logged to .rinnsal/flows/experiment/runs/")
+    print("View with: python -m rinnsal.viewer .rinnsal")
