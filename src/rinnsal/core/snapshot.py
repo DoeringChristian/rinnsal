@@ -395,7 +395,7 @@ def run_in_snapshot(
 
         model = run_in_snapshot(load_model, "model.pt", flow="training")
     """
-    import pickle
+    import cloudpickle
 
     _, snapshot_path = _resolve_snapshot_hash(hash, flow, db_path)
 
@@ -403,25 +403,25 @@ def run_in_snapshot(
     env = os.environ.copy()
     env["PYTHONPATH"] = build_pythonpath(snapshot_path)
 
-    # Serialize function and arguments
-    payload = pickle.dumps((func, args, kwargs))
+    # Serialize function and arguments using cloudpickle
+    payload = cloudpickle.dumps((func, args, kwargs))
 
     # Python code to execute in subprocess
     worker_code = """
 import sys
-import pickle
+import cloudpickle
 
 # Read payload from stdin
 payload = sys.stdin.buffer.read()
-func, args, kwargs = pickle.loads(payload)
+func, args, kwargs = cloudpickle.loads(payload)
 
 # Execute and write result to stdout
 try:
     result = func(*args, **kwargs)
-    sys.stdout.buffer.write(pickle.dumps(("ok", result)))
+    sys.stdout.buffer.write(cloudpickle.dumps(("ok", result)))
 except Exception as e:
     import traceback
-    sys.stdout.buffer.write(pickle.dumps(("error", str(e), traceback.format_exc())))
+    sys.stdout.buffer.write(cloudpickle.dumps(("error", str(e), traceback.format_exc())))
 """
 
     # Run in subprocess
@@ -436,8 +436,8 @@ except Exception as e:
         stderr = result.stderr.decode("utf-8", errors="replace")
         raise RuntimeError(f"Subprocess failed:\n{stderr}")
 
-    # Deserialize result
-    status, *data = pickle.loads(result.stdout)
+    # Deserialize result using cloudpickle
+    status, *data = cloudpickle.loads(result.stdout)
     if status == "ok":
         return data[0]
     else:
