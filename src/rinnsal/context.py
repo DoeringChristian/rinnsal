@@ -53,18 +53,15 @@ class Card:
     def _log_to_logger(
         self, kind: str, title: str, content: str = "", image: bytes = b""
     ) -> None:
-        """Log card item to the current logger if available."""
-        # Import here to avoid circular import
-        logger = current.logger
-        if logger is not None:
-            task_name = current.task_name or "unknown"
-            logger.add_card(
-                task=task_name,
-                kind=kind,
-                title=title,
-                content=content,
-                image=image,
-            )
+        """Log card item to the current logger if available.
+
+        Note: This is currently disabled because card logging is handled
+        by the engine after task completion, which works with all executors.
+        Keeping this method for potential future use with streaming logs.
+        """
+        # Card logging is now handled by the engine after task completion
+        # to ensure it works with all executors (inline, subprocess, etc.)
+        pass
 
     def text(self, content: str, title: str = "") -> None:
         """Add a text/markdown block."""
