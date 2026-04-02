@@ -167,10 +167,25 @@ function ScalarTagChart({ tag, data }: ScalarTagChartProps) {
             { label: "Value", grid: { show: true, stroke: "#eee" } },
           ],
           series,
-          cursor: { drag: { x: true, y: true } },
+          cursor: {
+            drag: { x: true, y: true },
+            // Disable drag selection when Alt is held (pan mode)
+            bind: {
+              mousedown: (_u: uPlot, _targ: HTMLElement, handler: Function) => {
+                return (e: MouseEvent) => {
+                  if (e.altKey) return null;
+                  return handler(e);
+                };
+              },
+            },
+          },
           hooks: {
             setSelect: [
               (u: uPlot) => {
+                if (isPanning) {
+                  u.setSelect({ left: 0, width: 0, top: 0, height: 0 }, false);
+                  return;
+                }
                 const { left, width } = u.select;
                 if (width > 0) {
                   u.setScale("x", {
@@ -185,49 +200,83 @@ function ScalarTagChart({ tag, data }: ScalarTagChartProps) {
               (u: uPlot) => {
                 const over = u.over;
 
-                // Alt+wheel = zoom x-axis around cursor
+                // Alt+wheel = zoom both axes around cursor
                 over.addEventListener("wheel", (e: WheelEvent) => {
                   if (!e.altKey) return;
                   e.preventDefault();
 
-                  const cursor = u.cursor.left!;
+                  const factor = e.deltaY > 0 ? 1.1 : 1 / 1.1;
+
+                  // Zoom x around cursor
+                  const cursorLeft = u.cursor.left!;
                   const xMin = u.scales.x.min!;
                   const xMax = u.scales.x.max!;
                   const xRange = xMax - xMin;
-                  const xPos = u.posToVal(cursor, "x");
+                  const xPos = u.posToVal(cursorLeft, "x");
+                  const xRatio = (xPos - xMin) / xRange;
+                  const newXRange = xRange * factor;
 
-                  const factor = e.deltaY > 0 ? 1.25 : 0.8;
-                  const newRange = xRange * factor;
+                  // Zoom y around cursor
+                  const cursorTop = u.cursor.top!;
+                  const yMin = u.scales.y.min!;
+                  const yMax = u.scales.y.max!;
+                  const yRange = yMax - yMin;
+                  const yPos = u.posToVal(cursorTop, "y");
+                  const yRatio = (yPos - yMin) / yRange;
+                  const newYRange = yRange * factor;
 
-                  // Keep cursor position proportionally stable
-                  const ratio = (xPos - xMin) / xRange;
-                  const newMin = xPos - ratio * newRange;
-                  const newMax = xPos + (1 - ratio) * newRange;
-
-                  u.setScale("x", { min: newMin, max: newMax });
+                  u.batch(() => {
+                    u.setScale("x", {
+                      min: xPos - xRatio * newXRange,
+                      max: xPos + (1 - xRatio) * newXRange,
+                    });
+                    u.setScale("y", {
+                      min: yPos - yRatio * newYRange,
+                      max: yPos + (1 - yRatio) * newYRange,
+                    });
+                  });
                 }, { passive: false });
 
-                // Alt+drag = pan x-axis
+                // Alt+drag = pan both axes
+                let panStartY = 0;
+                let panStartYMin = 0;
+                let panStartYMax = 0;
+
                 over.addEventListener("mousedown", (e: MouseEvent) => {
                   if (!e.altKey) return;
                   e.preventDefault();
                   isPanning = true;
                   panStartX = e.clientX;
+                  panStartY = e.clientY;
                   panStartScaleMin = u.scales.x.min!;
                   panStartScaleMax = u.scales.x.max!;
+                  panStartYMin = u.scales.y.min!;
+                  panStartYMax = u.scales.y.max!;
                   over.style.cursor = "grabbing";
                 });
 
                 window.addEventListener("mousemove", (e: MouseEvent) => {
                   if (!isPanning) return;
-                  const dx = e.clientX - panStartX;
-                  const pxRange = u.bbox.width / devicePixelRatio;
-                  const valRange = panStartScaleMax - panStartScaleMin;
-                  const valDx = (dx / pxRange) * valRange;
 
-                  u.setScale("x", {
-                    min: panStartScaleMin - valDx,
-                    max: panStartScaleMax - valDx,
+                  const dx = e.clientX - panStartX;
+                  const dy = e.clientY - panStartY;
+                  const pxW = u.bbox.width / devicePixelRatio;
+                  const pxH = u.bbox.height / devicePixelRatio;
+                  const xRange = panStartScaleMax - panStartScaleMin;
+                  const yRange = panStartYMax - panStartYMin;
+                  const valDx = (dx / pxW) * xRange;
+                  const valDy = (dy / pxH) * yRange;
+
+                  u.batch(() => {
+                    u.setScale("x", {
+                      min: panStartScaleMin - valDx,
+                      max: panStartScaleMax - valDx,
+                    });
+                    // y is inverted (screen y goes down, value goes up)
+                    u.setScale("y", {
+                      min: panStartYMin + valDy,
+                      max: panStartYMax + valDy,
+                    });
                   });
                 });
 
