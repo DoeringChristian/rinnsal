@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import UplotReact from "uplot-react";
 import "uplot/dist/uPlot.min.css";
 import { GroupedEvents } from "../lib/events";
@@ -58,6 +58,7 @@ function ScalarTagChart({
 }: ScalarTagChartProps) {
   const [logScale, setLogScale] = useState(false);
   const [relativeTime, setRelativeTime] = useState(false);
+  const chartRef = useRef<uPlot | null>(null);
 
   const { data, opts } = useMemo(() => {
     // Collect data for each run
@@ -183,6 +184,15 @@ function ScalarTagChart({
     <div className="bg-white rounded-lg border border-gray-200 p-4">
       <div className="flex items-center justify-end space-x-2 mb-2">
         <button
+          onClick={() => {
+            chartRef.current?.setScale("x", { min: undefined!, max: undefined! });
+            chartRef.current?.setScale("y", { min: undefined!, max: undefined! });
+          }}
+          className="px-2 py-1 text-xs rounded border bg-white border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
+        >
+          Reset Zoom
+        </button>
+        <button
           onClick={() => setLogScale(!logScale)}
           className={`px-2 py-1 text-xs rounded border transition-colors ${
             logScale
@@ -203,7 +213,7 @@ function ScalarTagChart({
           {relativeTime ? "Iteration" : "Rel. Time"}
         </button>
       </div>
-      <UplotReact options={opts} data={data as uPlot.AlignedData} />
+      <UplotReact options={opts} data={data as uPlot.AlignedData} onCreate={(u) => { chartRef.current = u; }} />
     </div>
   );
 }

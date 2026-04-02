@@ -55,13 +55,15 @@ def _build_frontend_if_needed() -> bool:
             check=True,
             capture_output=True,
         )
-        # Generate protobuf types
-        subprocess.run(
-            ["npm", "run", "proto"],
-            cwd=frontend_dir,
-            check=True,
-            capture_output=True,
-        )
+        # Generate protobuf types (skip if already generated)
+        proto_out = frontend_dir / "src" / "proto" / "events_pb.ts"
+        if not proto_out.exists():
+            subprocess.run(
+                ["npm", "run", "proto"],
+                cwd=frontend_dir,
+                check=True,
+                capture_output=True,
+            )
         # Build
         subprocess.run(
             ["npm", "run", "build"],

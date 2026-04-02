@@ -52,7 +52,7 @@ def train(epochs: int = 10, lr: float = 0.01):
 
     # Log a figure showing training progress
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(range(epochs), losses, marker='o', label=f'lr={lr}')
+    ax.plot(range(epochs), losses, marker="o", label=f"lr={lr}")
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Loss")
     ax.set_title("Training Loss")
@@ -62,12 +62,14 @@ def train(epochs: int = 10, lr: float = 0.01):
     plt.close(fig)
 
     # Log final status
-    logger.add_text("status", f"Training complete. Final loss: {losses[-1]:.4f}")
+    logger.add_text(
+        "status", f"Training complete. Final loss: {losses[-1]:.4f}"
+    )
 
     # Also add to card for the Cards tab
     current.card.text(f"Trained for {epochs} epochs with lr={lr}")
     current.card.table(
-        [[i+1, f"{losses[i]:.4f}"] for i in range(epochs)],
+        [[i + 1, f"{losses[i]:.4f}"] for i in range(epochs)],
         title="Loss per Epoch",
         headers=["Epoch", "Loss"],
     )
@@ -114,7 +116,9 @@ if __name__ == "__main__":
     print("\nLogs saved to .rinnsal/flows/training_pipeline/runs/")
     print("View with: python -m rinnsal.viewer")
     print("\nIn the viewer you can see:")
-    print("  - Scalars tab: train/loss, train/accuracy, eval/loss, eval/accuracy")
+    print(
+        "  - Scalars tab: train/loss, train/accuracy, eval/loss, eval/accuracy"
+    )
     print("  - Text tab: config, status, eval/result")
     print("  - Figures tab: train/loss_curve")
     print("  - Cards tab: training metrics table, evaluation results")
