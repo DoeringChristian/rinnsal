@@ -141,6 +141,13 @@ function ScalarTagChart({ tag, data }: ScalarTagChartProps) {
       ];
 
       container.innerHTML = "";
+
+      // Alt+wheel zoom and Alt+drag pan state
+      let isPanning = false;
+      let panStartX = 0;
+      let panStartScaleMin = 0;
+      let panStartScaleMax = 0;
+
       chartRef.current = new uPlot(
         {
           width: container.clientWidth || 800,
@@ -172,6 +179,64 @@ function ScalarTagChart({ tag, data }: ScalarTagChartProps) {
                   });
                 }
                 u.setSelect({ left: 0, width: 0, top: 0, height: 0 }, false);
+              },
+            ],
+            init: [
+              (u: uPlot) => {
+                const over = u.over;
+
+                // Alt+wheel = zoom x-axis around cursor
+                over.addEventListener("wheel", (e: WheelEvent) => {
+                  if (!e.altKey) return;
+                  e.preventDefault();
+
+                  const cursor = u.cursor.left!;
+                  const xMin = u.scales.x.min!;
+                  const xMax = u.scales.x.max!;
+                  const xRange = xMax - xMin;
+                  const xPos = u.posToVal(cursor, "x");
+
+                  const factor = e.deltaY > 0 ? 1.25 : 0.8;
+                  const newRange = xRange * factor;
+
+                  // Keep cursor position proportionally stable
+                  const ratio = (xPos - xMin) / xRange;
+                  const newMin = xPos - ratio * newRange;
+                  const newMax = xPos + (1 - ratio) * newRange;
+
+                  u.setScale("x", { min: newMin, max: newMax });
+                }, { passive: false });
+
+                // Alt+drag = pan x-axis
+                over.addEventListener("mousedown", (e: MouseEvent) => {
+                  if (!e.altKey) return;
+                  e.preventDefault();
+                  isPanning = true;
+                  panStartX = e.clientX;
+                  panStartScaleMin = u.scales.x.min!;
+                  panStartScaleMax = u.scales.x.max!;
+                  over.style.cursor = "grabbing";
+                });
+
+                window.addEventListener("mousemove", (e: MouseEvent) => {
+                  if (!isPanning) return;
+                  const dx = e.clientX - panStartX;
+                  const pxRange = u.bbox.width / devicePixelRatio;
+                  const valRange = panStartScaleMax - panStartScaleMin;
+                  const valDx = (dx / pxRange) * valRange;
+
+                  u.setScale("x", {
+                    min: panStartScaleMin - valDx,
+                    max: panStartScaleMax - valDx,
+                  });
+                });
+
+                window.addEventListener("mouseup", () => {
+                  if (isPanning) {
+                    isPanning = false;
+                    over.style.cursor = "";
+                  }
+                });
               },
             ],
           },
