@@ -4,25 +4,23 @@ import ScalarChart from "./components/ScalarChart";
 import TextLog from "./components/TextLog";
 import FigureViewer from "./components/FigureViewer";
 import CardViewer from "./components/CardViewer";
-import { useEvents } from "./hooks/useEvents";
+import { useEvents, Tab } from "./hooks/useEvents";
 import { fetchConfig } from "./lib/api";
-
-type Tab = "scalars" | "text" | "figures" | "cards";
 
 export default function App() {
   const [rootDir, setRootDir] = useState("");
   const [selectedRuns, setSelectedRuns] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<Tab>("scalars");
 
-  const { events, isLoading } = useEvents(selectedRuns);
+  const { scalars, text, figures, cards, isLoading } = useEvents(
+    selectedRuns,
+    activeTab,
+  );
 
-  // Load initial config from backend
   useEffect(() => {
     fetchConfig()
       .then((config) => {
-        if (config.logDir) {
-          setRootDir(config.logDir);
-        }
+        if (config.logDir) setRootDir(config.logDir);
       })
       .catch((e) => console.error("Failed to fetch config:", e));
   }, []);
@@ -89,16 +87,16 @@ export default function App() {
           ) : (
             <>
               {activeTab === "scalars" && (
-                <ScalarChart events={events} selectedRuns={selectedRuns} />
+                <ScalarChart data={scalars} />
               )}
               {activeTab === "text" && (
-                <TextLog events={events} selectedRuns={selectedRuns} />
+                <TextLog data={text} />
               )}
               {activeTab === "figures" && (
-                <FigureViewer events={events} selectedRuns={selectedRuns} />
+                <FigureViewer data={figures} selectedRuns={selectedRuns} />
               )}
               {activeTab === "cards" && (
-                <CardViewer events={events} selectedRuns={selectedRuns} />
+                <CardViewer data={cards} />
               )}
             </>
           )}

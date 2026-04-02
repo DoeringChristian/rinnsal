@@ -1,26 +1,25 @@
-import { useMemo, useRef, useState } from "react";
-import UplotReact from "uplot-react";
+import { useMemo, useRef, useState, useEffect, useCallback } from "react";
+import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import { GroupedEvents } from "../lib/events";
+import { ScalarData } from "../lib/api";
 import { getRunColor } from "./RunSelector";
 import { CollapsibleSection } from "./CollapsibleSection";
+import { LazyRender } from "./LazyRender";
 
 interface ScalarChartProps {
-  events: Map<string, GroupedEvents>;
-  selectedRuns: string[];
+  data: Map<string, ScalarData>;
 }
 
-export default function ScalarChart({ events, selectedRuns }: ScalarChartProps) {
-  // Collect all scalar tags across all runs
+export default function ScalarChart({ data }: ScalarChartProps) {
   const allTags = useMemo(() => {
     const tags = new Set<string>();
-    for (const grouped of events.values()) {
-      for (const tag of grouped.scalars.keys()) {
+    for (const runData of data.values()) {
+      for (const tag of Object.keys(runData)) {
         tags.add(tag);
       }
     }
     return Array.from(tags).sort();
-  }, [events]);
+  }, [data]);
 
   if (allTags.length === 0) {
     return (
@@ -34,11 +33,9 @@ export default function ScalarChart({ events, selectedRuns }: ScalarChartProps) 
     <div className="space-y-6">
       {allTags.map((tag) => (
         <CollapsibleSection key={tag} title={tag}>
-          <ScalarTagChart
-            tag={tag}
-            events={events}
-            selectedRuns={selectedRuns}
-          />
+          <LazyRender>
+            <ScalarTagChart tag={tag} data={data} />
+          </LazyRender>
         </CollapsibleSection>
       ))}
     </div>
@@ -47,173 +44,192 @@ export default function ScalarChart({ events, selectedRuns }: ScalarChartProps) 
 
 interface ScalarTagChartProps {
   tag: string;
-  events: Map<string, GroupedEvents>;
-  selectedRuns: string[];
+  data: Map<string, ScalarData>;
 }
 
-function ScalarTagChart({
-  tag,
-  events,
-  selectedRuns,
-}: ScalarTagChartProps) {
+function buildChartData(
+  data: Map<string, ScalarData>,
+  tag: string,
+  relativeTime: boolean,
+) {
+  const runs: string[] = [];
+  for (const [run, runData] of data) {
+    if (tag in runData && runData[tag].length > 0) runs.push(run);
+  }
+  runs.sort();
+
+  if (runs.length === 0) return null;
+
+  const runXY: { run: string; x: number[]; y: number[] }[] = [];
+  for (const run of runs) {
+    const points = data.get(run)![tag];
+    let x: number[];
+    if (relativeTime) {
+      const t0 = points[0].ts;
+      x = points.map((p) => p.ts - t0);
+    } else {
+      x = points.map((p) => p.it);
+    }
+    runXY.push({ run, x, y: points.map((p) => p.value) });
+  }
+
+  // Merge x values
+  const xSet = new Set<number>();
+  for (const rd of runXY) for (const x of rd.x) xSet.add(x);
+  const sortedX = Array.from(xSet).sort((a, b) => a - b);
+
+  // Build aligned data
+  const aligned: (number | null)[][] = [sortedX];
+  for (const rd of runXY) {
+    const map = new Map<number, number>();
+    for (let i = 0; i < rd.x.length; i++) map.set(rd.x[i], rd.y[i]);
+    aligned.push(sortedX.map((x) => map.get(x) ?? null) as (number | null)[]);
+  }
+
+  return { data: aligned, runs };
+}
+
+function ScalarTagChart({ tag, data }: ScalarTagChartProps) {
   const [logScale, setLogScale] = useState(false);
   const [relativeTime, setRelativeTime] = useState(false);
+
+  const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
+  const chartRunsRef = useRef<string[]>([]);
 
-  const { data, opts } = useMemo(() => {
-    // Collect data for each run
-    const runData: { run: string; x: number[]; y: number[] }[] = [];
+  const chartData = useMemo(
+    () => buildChartData(data, tag, relativeTime),
+    [data, tag, relativeTime],
+  );
 
-    for (const run of selectedRuns) {
-      const grouped = events.get(run);
-      if (!grouped) continue;
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
 
-      const scalars = grouped.scalars.get(tag);
-      if (!scalars || scalars.length === 0) continue;
-
-      let x: number[];
-      if (relativeTime) {
-        const startTime = scalars[0].timestamp;
-        x = scalars.map((s) => s.timestamp - startTime);
-      } else {
-        x = scalars.map((s) => Number(s.iteration));
+    if (!chartData) {
+      if (chartRef.current) {
+        chartRef.current.destroy();
+        chartRef.current = null;
+        chartRunsRef.current = [];
       }
-      const y = scalars.map((s) => s.value);
-
-      runData.push({ run, x, y });
+      return;
     }
 
-    if (runData.length === 0) {
-      return { data: null, series: [], opts: null };
-    }
+    const { data: aligned, runs } = chartData;
+    const chart = chartRef.current;
+    const prevRuns = chartRunsRef.current;
 
-    // Build aligned data for uPlot
-    // uPlot expects [xValues, ...yValuesPerSeries]
-    // We need to merge x values from all runs and align y values
+    if (!chart) {
+      // First render
+      const series: uPlot.Series[] = [
+        { label: relativeTime ? "Time (s)" : "Iteration" },
+        ...runs.map((run) => ({
+          label: run.split("/").pop() || run,
+          stroke: getRunColor(run),
+          width: 2,
+          spanGaps: true,
+        })),
+      ];
 
-    // Collect all unique x values
-    const allX = new Set<number>();
-    for (const rd of runData) {
-      for (const x of rd.x) {
-        allX.add(x);
-      }
-    }
-    const sortedX = Array.from(allX).sort((a, b) => a - b);
-
-    // Create maps for quick lookup
-    const xToY: Map<string, Map<number, number>> = new Map();
-    for (const rd of runData) {
-      const map = new Map<number, number>();
-      for (let i = 0; i < rd.x.length; i++) {
-        map.set(rd.x[i], rd.y[i]);
-      }
-      xToY.set(rd.run, map);
-    }
-
-    // Build data arrays
-    const data: (number | null)[][] = [sortedX];
-    for (const rd of runData) {
-      const yMap = xToY.get(rd.run)!;
-      const yArr = sortedX.map((x) => yMap.get(x) ?? null);
-      data.push(yArr as (number | null)[]);
-    }
-
-    // Build series config
-    const series: uPlot.Series[] = [
-      { label: relativeTime ? "Time (s)" : "Iteration" },
-      ...runData.map((rd) => ({
-        label: rd.run.split("/").pop() || rd.run,
-        stroke: getRunColor(rd.run),
-        width: 2,
-        spanGaps: true,
-      })),
-    ];
-
-    // Build options
-    const opts: uPlot.Options = {
-      width: 800,
-      height: 300,
-      scales: {
-        y: {
-          distr: logScale ? 3 : 1, // 3 = log
-        },
-      },
-      axes: [
+      container.innerHTML = "";
+      chartRef.current = new uPlot(
         {
-          label: relativeTime ? "Time (s)" : "Iteration",
-          grid: { show: true, stroke: "#eee" },
-          values: relativeTime
-            ? (_u, vals) => vals.map((v) => v.toFixed(1))
-            : (_u, vals) => vals.map((v) => String(Math.round(v))),
-        },
-        {
-          label: "Value",
-          grid: { show: true, stroke: "#eee" },
-        },
-      ],
-      series,
-      cursor: {
-        drag: {
-          x: true,
-          y: true,
-        },
-      },
-      hooks: {
-        setSelect: [
-          (u) => {
-            const { left, width } = u.select;
-            if (width > 0) {
-              const min = u.posToVal(left, "x");
-              const max = u.posToVal(left + width, "x");
-              u.setScale("x", { min, max });
-            }
-            u.setSelect({ left: 0, width: 0, top: 0, height: 0 }, false);
+          width: container.clientWidth || 800,
+          height: 300,
+          scales: { y: { distr: logScale ? 3 : 1 } },
+          axes: [
+            {
+              label: relativeTime ? "Time (s)" : "Iteration",
+              grid: { show: true, stroke: "#eee" },
+              values: relativeTime
+                ? (_u: uPlot, vals: number[]) => vals.map((v) => v.toFixed(1))
+                : (_u: uPlot, vals: number[]) => vals.map((v) => String(Math.round(v))),
+            },
+            { label: "Value", grid: { show: true, stroke: "#eee" } },
+          ],
+          series,
+          cursor: { drag: { x: true, y: true } },
+          hooks: {
+            setSelect: [
+              (u: uPlot) => {
+                const { left, width } = u.select;
+                if (width > 0) {
+                  u.setScale("x", {
+                    min: u.posToVal(left, "x"),
+                    max: u.posToVal(left + width, "x"),
+                  });
+                }
+                u.setSelect({ left: 0, width: 0, top: 0, height: 0 }, false);
+              },
+            ],
           },
-        ],
-      },
+        },
+        aligned as uPlot.AlignedData,
+        container,
+      );
+      chartRunsRef.current = runs;
+      return;
+    }
+
+    // Incremental update
+    const nextSet = new Set(runs);
+
+    // Remove deselected series (backwards for stable indices)
+    for (let i = prevRuns.length - 1; i >= 0; i--) {
+      if (!nextSet.has(prevRuns[i])) {
+        chart.delSeries(i + 1);
+      }
+    }
+
+    // Add new series
+    const remaining = new Set(prevRuns.filter((r) => nextSet.has(r)));
+    for (const run of runs) {
+      if (!remaining.has(run)) {
+        chart.addSeries({
+          label: run.split("/").pop() || run,
+          stroke: getRunColor(run),
+          width: 2,
+          spanGaps: true,
+        });
+      }
+    }
+
+    chart.setData(aligned as uPlot.AlignedData);
+    chartRunsRef.current = runs;
+  }, [chartData]);
+
+  useEffect(() => {
+    if (chartRef.current) {
+      chartRef.current.setScale("y", { distr: logScale ? 3 : 1 } as any);
+    }
+  }, [logScale]);
+
+  useEffect(() => {
+    return () => {
+      if (chartRef.current) {
+        chartRef.current.destroy();
+        chartRef.current = null;
+      }
     };
+  }, []);
 
-    return { data, series, opts };
-  }, [events, selectedRuns, tag, logScale, relativeTime]);
+  const resetZoom = useCallback(() => {
+    if (chartRef.current) {
+      chartRef.current.setScale("x", { min: undefined!, max: undefined! });
+      chartRef.current.setScale("y", { min: undefined!, max: undefined! });
+    }
+  }, []);
 
-  if (!data || !opts) {
-    return null;
-  }
+  if (!chartData) return null;
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 p-4">
       <div className="flex items-center justify-end space-x-2 mb-2">
-        <button
-          onClick={() => {
-            chartRef.current?.setScale("x", { min: undefined!, max: undefined! });
-            chartRef.current?.setScale("y", { min: undefined!, max: undefined! });
-          }}
-          className="px-2 py-1 text-xs rounded border bg-white border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors"
-        >
-          Reset Zoom
-        </button>
-        <button
-          onClick={() => setLogScale(!logScale)}
-          className={`px-2 py-1 text-xs rounded border transition-colors ${
-            logScale
-              ? "bg-blue-100 border-blue-300 text-blue-700"
-              : "bg-white border-gray-300 text-gray-600 hover:bg-gray-50"
-          }`}
-        >
-          {logScale ? "Linear Y" : "Log Y"}
-        </button>
-        <button
-          onClick={() => setRelativeTime(!relativeTime)}
-          className={`px-2 py-1 text-xs rounded border transition-colors ${
-            relativeTime
-              ? "bg-blue-100 border-blue-300 text-blue-700"
-              : "bg-white border-gray-300 text-gray-600 hover:bg-gray-50"
-          }`}
-        >
-          {relativeTime ? "Iteration" : "Rel. Time"}
-        </button>
+        <button onClick={resetZoom} className="px-2 py-1 text-xs rounded border bg-white border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors">Reset Zoom</button>
+        <button onClick={() => setLogScale(!logScale)} className={`px-2 py-1 text-xs rounded border transition-colors ${logScale ? "bg-blue-100 border-blue-300 text-blue-700" : "bg-white border-gray-300 text-gray-600 hover:bg-gray-50"}`}>{logScale ? "Linear Y" : "Log Y"}</button>
+        <button onClick={() => setRelativeTime(!relativeTime)} className={`px-2 py-1 text-xs rounded border transition-colors ${relativeTime ? "bg-blue-100 border-blue-300 text-blue-700" : "bg-white border-gray-300 text-gray-600 hover:bg-gray-50"}`}>{relativeTime ? "Iteration" : "Rel. Time"}</button>
       </div>
-      <UplotReact options={opts} data={data as uPlot.AlignedData} onCreate={(u) => { chartRef.current = u; }} />
+      <div ref={containerRef} />
     </div>
   );
 }

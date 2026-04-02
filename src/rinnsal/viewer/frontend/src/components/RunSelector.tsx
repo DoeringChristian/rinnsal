@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { fetchRuns, RunInfo } from "../lib/api";
 
 interface RunSelectorProps {
@@ -32,6 +32,8 @@ export function getRunColor(run: string): string {
   return RUN_COLORS[idx % RUN_COLORS.length];
 }
 
+const MAX_VISIBLE = 200;
+
 export default function RunSelector({
   rootDir,
   selectedRuns,
@@ -39,7 +41,6 @@ export default function RunSelector({
 }: RunSelectorProps) {
   const [runs, setRuns] = useState<RunInfo[]>([]);
   const [filter, setFilter] = useState("");
-  const [filterError, setFilterError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
 
   // Fetch runs when rootDir changes
@@ -56,19 +57,25 @@ export default function RunSelector({
       .finally(() => setIsLoading(false));
   }, [rootDir]);
 
-  // Filter runs by regex
-  let filteredRuns = runs;
-  if (filter) {
+  // Filter runs by regex (pure computation, no state updates)
+  const { filteredRuns, filterError } = useMemo(() => {
+    if (!filter) {
+      return { filteredRuns: runs, filterError: null };
+    }
     try {
       const regex = new RegExp(filter, "i");
-      filteredRuns = runs.filter((r) => regex.test(r.name));
-      setFilterError(null);
+      return { filteredRuns: runs.filter((r) => regex.test(r.name)), filterError: null };
     } catch (e) {
-      if (e instanceof SyntaxError) {
-        setFilterError(e.message);
-      }
+      return {
+        filteredRuns: runs,
+        filterError: e instanceof SyntaxError ? e.message : null,
+      };
     }
-  }
+  }, [runs, filter]);
+
+  // Limit rendered DOM nodes
+  const visibleRuns = filteredRuns.slice(0, MAX_VISIBLE);
+  const hasMore = filteredRuns.length > MAX_VISIBLE;
 
   const toggleRun = (runPath: string) => {
     if (selectedRuns.includes(runPath)) {
@@ -112,7 +119,7 @@ export default function RunSelector({
       </p>
 
       <div className="space-y-1">
-        {filteredRuns.map((run) => {
+        {visibleRuns.map((run) => {
           const isSelected = selectedRuns.includes(run.path);
           const color = getRunColor(run.path);
 
@@ -140,6 +147,11 @@ export default function RunSelector({
             </label>
           );
         })}
+        {hasMore && (
+          <p className="text-xs text-gray-400 py-1">
+            Showing {MAX_VISIBLE} of {filteredRuns.length} runs. Use filter to narrow down.
+          </p>
+        )}
       </div>
     </div>
   );

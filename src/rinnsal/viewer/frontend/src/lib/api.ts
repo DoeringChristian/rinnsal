@@ -11,9 +11,6 @@ export interface RunInfo {
   name: string;
 }
 
-/**
- * Fetch initial configuration from the backend.
- */
 export async function fetchConfig(): Promise<Config> {
   const response = await fetch("/api/config");
   if (!response.ok) {
@@ -22,9 +19,6 @@ export async function fetchConfig(): Promise<Config> {
   return response.json();
 }
 
-/**
- * Fetch list of runs from the backend.
- */
 export async function fetchRuns(rootDir: string): Promise<RunInfo[]> {
   const response = await fetch(`/api/runs?root=${encodeURIComponent(rootDir)}`);
   if (!response.ok) {
@@ -37,43 +31,43 @@ export async function fetchRuns(rootDir: string): Promise<RunInfo[]> {
   }));
 }
 
-/**
- * Fetch raw protobuf events for a run.
- */
-export async function fetchEvents(runPath: string): Promise<ArrayBuffer> {
-  const response = await fetch(`/api/events/${encodeURIComponent(runPath)}`);
-  if (!response.ok) {
-    throw new Error(`Failed to fetch events: ${response.statusText}`);
-  }
-  return response.arrayBuffer();
+/** Scalar data: {tag: [{it, value, ts}, ...]} */
+export type ScalarData = Record<string, { it: number; value: number; ts: number }[]>;
+
+export async function fetchScalars(runPath: string): Promise<ScalarData> {
+  const response = await fetch(`/api/scalars/${encodeURIComponent(runPath)}`);
+  if (!response.ok) throw new Error(`Failed to fetch scalars: ${response.statusText}`);
+  return response.json();
 }
 
-/**
- * Create a WebSocket connection for streaming events.
- */
-export function createEventStream(
-  runPath: string,
-  onData: (buffer: ArrayBuffer) => void,
-  onError?: (error: Event) => void
-): WebSocket {
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const ws = new WebSocket(
-    `${protocol}//${window.location.host}/api/events/${encodeURIComponent(runPath)}/stream`
-  );
+/** Text data: {tag: [{it, value}, ...]} */
+export type TextData = Record<string, { it: number; value: string }[]>;
 
-  ws.binaryType = "arraybuffer";
+export async function fetchText(runPath: string): Promise<TextData> {
+  const response = await fetch(`/api/text/${encodeURIComponent(runPath)}`);
+  if (!response.ok) throw new Error(`Failed to fetch text: ${response.statusText}`);
+  return response.json();
+}
 
-  ws.onmessage = (event) => {
-    if (event.data instanceof ArrayBuffer) {
-      onData(event.data);
-    }
-  };
+/** Figure metadata: {tag: [{it}, ...]} — no image bytes */
+export type FigureMetaData = Record<string, { it: number }[]>;
 
-  ws.onerror = (error) => {
-    if (onError) {
-      onError(error);
-    }
-  };
+export async function fetchFiguresMeta(runPath: string): Promise<FigureMetaData> {
+  const response = await fetch(`/api/figures/${encodeURIComponent(runPath)}`);
+  if (!response.ok) throw new Error(`Failed to fetch figures: ${response.statusText}`);
+  return response.json();
+}
 
-  return ws;
+/** Get a single figure image URL (loaded on demand) */
+export function figureImageUrl(runPath: string, tag: string, it: number): string {
+  return `/api/figure/${encodeURIComponent(runPath)}?tag=${encodeURIComponent(tag)}&it=${it}`;
+}
+
+/** Card data: {task: [{it, kind, title, content, image?}, ...]} */
+export type CardData = Record<string, { it: number; kind: string; title: string; content: string; image?: string }[]>;
+
+export async function fetchCards(runPath: string): Promise<CardData> {
+  const response = await fetch(`/api/cards/${encodeURIComponent(runPath)}`);
+  if (!response.ok) throw new Error(`Failed to fetch cards: ${response.statusText}`);
+  return response.json();
 }

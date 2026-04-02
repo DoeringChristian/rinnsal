@@ -1,135 +1,86 @@
 import { useMemo, useState } from "react";
-import { GroupedEvents } from "../lib/events";
+import { FigureMetaData, figureImageUrl } from "../lib/api";
 import { getRunColor } from "./RunSelector";
 import { CollapsibleSection } from "./CollapsibleSection";
 
 interface FigureViewerProps {
-  events: Map<string, GroupedEvents>;
+  data: Map<string, FigureMetaData>;
   selectedRuns: string[];
 }
 
-export default function FigureViewer({ events, selectedRuns }: FigureViewerProps) {
-  // Collect all figure tags across all runs
+export default function FigureViewer({ data, selectedRuns }: FigureViewerProps) {
   const allTags = useMemo(() => {
     const tags = new Set<string>();
-    for (const grouped of events.values()) {
-      for (const tag of grouped.figures.keys()) {
-        tags.add(tag);
-      }
+    for (const runData of data.values()) {
+      for (const tag of Object.keys(runData)) tags.add(tag);
     }
     return Array.from(tags).sort();
-  }, [events]);
+  }, [data]);
 
   if (allTags.length === 0) {
-    return (
-      <p className="text-gray-500 text-center mt-8">
-        No figures logged in selected runs.
-      </p>
-    );
+    return <p className="text-gray-500 text-center mt-8">No figures logged in selected runs.</p>;
   }
 
   return (
     <div className="space-y-6">
       {allTags.map((tag) => (
         <CollapsibleSection key={tag} title={tag}>
-          <FigureTagSection
-            tag={tag}
-            events={events}
-            selectedRuns={selectedRuns}
-          />
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {Array.from(data).map(([run, runData]) => {
+              const figs = runData[tag];
+              if (!figs || figs.length === 0) return null;
+              return (
+                <FigureRunCard
+                  key={run}
+                  run={run}
+                  runPath={selectedRuns.find((r) => r === run) || run}
+                  tag={tag}
+                  figures={figs}
+                  color={getRunColor(run)}
+                />
+              );
+            })}
+          </div>
         </CollapsibleSection>
       ))}
     </div>
   );
 }
 
-interface FigureTagSectionProps {
-  tag: string;
-  events: Map<string, GroupedEvents>;
-  selectedRuns: string[];
-}
-
-function FigureTagSection({ tag, events, selectedRuns }: FigureTagSectionProps) {
-  return (
-    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-      {selectedRuns.map((run) => {
-        const grouped = events.get(run);
-        if (!grouped) return null;
-
-        const figures = grouped.figures.get(tag);
-        if (!figures || figures.length === 0) return null;
-
-        return (
-          <FigureRunCard
-            key={run}
-            run={run}
-            figures={figures}
-            color={getRunColor(run)}
-          />
-        );
-      })}
-    </div>
-  );
-}
-
 interface FigureRunCardProps {
   run: string;
-  figures: { iteration: bigint; image: Uint8Array; data: Uint8Array; interactive: boolean }[];
+  runPath: string;
+  tag: string;
+  figures: { it: number }[];
   color: string;
 }
 
-function FigureRunCard({ run, figures, color }: FigureRunCardProps) {
+function FigureRunCard({ run, runPath, tag, figures, color }: FigureRunCardProps) {
   const [selectedIdx, setSelectedIdx] = useState(figures.length - 1);
 
   const runName = run.split("/").pop() || run;
   const currentFigure = figures[selectedIdx];
-
-  // Convert image bytes to data URL
-  const imageUrl = useMemo(() => {
-    if (!currentFigure.image || currentFigure.image.length === 0) {
-      return null;
-    }
-    // Create a new Uint8Array copy to ensure it's a standard ArrayBuffer
-    const copy = new Uint8Array(currentFigure.image);
-    const blob = new Blob([copy], { type: "image/png" });
-    return URL.createObjectURL(blob);
-  }, [currentFigure.image]);
+  const imageUrl = figureImageUrl(runPath, tag, currentFigure.it);
 
   return (
     <div className="bg-white rounded-lg border border-gray-200 p-4">
       <div className="flex items-center justify-between mb-3">
-        <span className="font-medium" style={{ color }}>
-          {runName}
-        </span>
-        <span className="text-sm text-gray-500">
-          Iteration: {currentFigure.iteration.toString()}
-        </span>
+        <span className="font-medium" style={{ color }}>{runName}</span>
+        <span className="text-sm text-gray-500">Iteration: {currentFigure.it}</span>
       </div>
 
       {figures.length > 1 && (
         <div className="mb-3">
-          <input
-            type="range"
-            min={0}
-            max={figures.length - 1}
-            value={selectedIdx}
-            onChange={(e) => setSelectedIdx(parseInt(e.target.value))}
-            className="w-full"
-          />
+          <input type="range" min={0} max={figures.length - 1} value={selectedIdx} onChange={(e) => setSelectedIdx(parseInt(e.target.value))} className="w-full" />
         </div>
       )}
 
-      {imageUrl ? (
-        <img
-          src={imageUrl}
-          alt={`${runName} - iteration ${currentFigure.iteration}`}
-          className="max-w-full rounded"
-        />
-      ) : (
-        <div className="bg-gray-100 rounded p-8 text-center text-gray-500">
-          No image data
-        </div>
-      )}
+      <img
+        src={imageUrl}
+        alt={`${runName} - iteration ${currentFigure.it}`}
+        className="max-w-full rounded"
+        loading="lazy"
+      />
     </div>
   );
 }
