@@ -169,6 +169,7 @@ function ScalarTagChart({ tag, data }: ScalarTagChartProps) {
           series,
           cursor: {
             drag: { x: true, y: true },
+            focus: { prox: 30 },
             // Disable drag selection when Alt is held (pan mode)
             bind: {
               mousedown: (_u: uPlot, _targ: HTMLElement, handler: Function) => {
@@ -179,6 +180,7 @@ function ScalarTagChart({ tag, data }: ScalarTagChartProps) {
               },
             },
           },
+          focus: { alpha: 0.3 },
           hooks: {
             setSelect: [
               (u: uPlot) => {
