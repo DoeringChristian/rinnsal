@@ -39,32 +39,22 @@ def _get_frontend_dist() -> Path:
 def _build_frontend_if_needed() -> bool:
     """Build frontend if dist doesn't exist. Returns True if available."""
     dist = _get_frontend_dist()
-    if dist.exists():
+    if (dist / "index.html").exists():
         return True
 
     frontend_dir = Path(__file__).parent / "frontend"
     if not (frontend_dir / "package.json").exists():
         return False
 
-    print("Building frontend...")
+    print("Frontend dist not found. Attempting to build...")
+    print(f"  (looked in {dist})")
     try:
-        # Install dependencies
         subprocess.run(
             ["npm", "install"],
             cwd=frontend_dir,
             check=True,
             capture_output=True,
         )
-        # Generate protobuf types (skip if already generated)
-        proto_out = frontend_dir / "src" / "proto" / "events_pb.ts"
-        if not proto_out.exists():
-            subprocess.run(
-                ["npm", "run", "proto"],
-                cwd=frontend_dir,
-                check=True,
-                capture_output=True,
-            )
-        # Build
         subprocess.run(
             ["npm", "run", "build"],
             cwd=frontend_dir,
@@ -74,6 +64,8 @@ def _build_frontend_if_needed() -> bool:
         return True
     except (subprocess.CalledProcessError, FileNotFoundError) as e:
         print(f"Failed to build frontend: {e}")
+        print("Hint: run 'npm run build' in src/rinnsal/viewer/frontend/ "
+              "and commit the dist/ folder.")
         return False
 
 
