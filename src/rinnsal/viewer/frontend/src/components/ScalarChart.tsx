@@ -96,6 +96,7 @@ function ScalarTagChart({ tag, data }: ScalarTagChartProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
   const chartRunsRef = useRef<string[]>([]);
+  const prevLogScaleRef = useRef(logScale);
 
   const chartData = useMemo(
     () => buildChartData(data, tag, relativeTime),
@@ -119,8 +120,16 @@ function ScalarTagChart({ tag, data }: ScalarTagChartProps) {
     const chart = chartRef.current;
     const prevRuns = chartRunsRef.current;
 
-    if (!chart) {
-      // First render
+    // Force full rebuild when logScale changes (distr can't be updated incrementally)
+    const logScaleChanged = logScale !== prevLogScaleRef.current;
+    prevLogScaleRef.current = logScale;
+
+    if (!chart || logScaleChanged) {
+      // First render or full rebuild (e.g. logScale changed)
+      if (chartRef.current) {
+        chartRef.current.destroy();
+        chartRef.current = null;
+      }
       const series: uPlot.Series[] = [
         { label: relativeTime ? "Time (s)" : "Iteration" },
         ...runs.map((run) => ({
@@ -136,7 +145,10 @@ function ScalarTagChart({ tag, data }: ScalarTagChartProps) {
         {
           width: container.clientWidth || 800,
           height: 300,
-          scales: { y: { distr: logScale ? 3 : 1 } },
+          scales: {
+            x: { auto: true },
+            y: { auto: true, distr: logScale ? 3 : 1 },
+          },
           axes: [
             {
               label: relativeTime ? "Time (s)" : "Iteration",
@@ -195,14 +207,15 @@ function ScalarTagChart({ tag, data }: ScalarTagChartProps) {
     }
 
     chart.setData(aligned as uPlot.AlignedData);
-    chartRunsRef.current = runs;
-  }, [chartData]);
 
-  useEffect(() => {
-    if (chartRef.current) {
-      chartRef.current.setScale("y", { distr: logScale ? 3 : 1 } as any);
+    // Auto-fit axes to show all data after structural changes
+    const xVals = aligned[0] as number[];
+    if (xVals.length > 0) {
+      chart.setScale("x", { min: xVals[0], max: xVals[xVals.length - 1] });
     }
-  }, [logScale]);
+
+    chartRunsRef.current = runs;
+  }, [chartData, logScale]);
 
   useEffect(() => {
     return () => {
@@ -214,11 +227,27 @@ function ScalarTagChart({ tag, data }: ScalarTagChartProps) {
   }, []);
 
   const resetZoom = useCallback(() => {
-    if (chartRef.current) {
-      chartRef.current.setScale("x", { min: undefined!, max: undefined! });
-      chartRef.current.setScale("y", { min: undefined!, max: undefined! });
+    const chart = chartRef.current;
+    if (!chart || !chartData) return;
+    const xVals = chartData.data[0] as number[];
+    if (xVals.length > 0) {
+      chart.setScale("x", { min: xVals[0], max: xVals[xVals.length - 1] });
     }
-  }, []);
+    // Let y auto-range by setting to the data extent
+    let yMin = Infinity, yMax = -Infinity;
+    for (let s = 1; s < chartData.data.length; s++) {
+      for (const v of chartData.data[s]) {
+        if (v != null) {
+          if (v < yMin) yMin = v;
+          if (v > yMax) yMax = v;
+        }
+      }
+    }
+    if (yMin < yMax) {
+      const pad = (yMax - yMin) * 0.05 || 1;
+      chart.setScale("y", { min: yMin - pad, max: yMax + pad });
+    }
+  }, [chartData]);
 
   if (!chartData) return null;
 

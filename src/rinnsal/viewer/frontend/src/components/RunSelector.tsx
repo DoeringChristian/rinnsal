@@ -5,6 +5,7 @@ interface RunSelectorProps {
   rootDir: string;
   selectedRuns: string[];
   onSelectionChange: (runs: string[]) => void;
+  refreshKey?: number;
 }
 
 const RUN_COLORS = [
@@ -38,6 +39,7 @@ export default function RunSelector({
   rootDir,
   selectedRuns,
   onSelectionChange,
+  refreshKey = 0,
 }: RunSelectorProps) {
   const [runs, setRuns] = useState<RunInfo[]>([]);
   const [filter, setFilter] = useState("");
@@ -55,7 +57,7 @@ export default function RunSelector({
       .then(setRuns)
       .catch((e) => console.error("Failed to fetch runs:", e))
       .finally(() => setIsLoading(false));
-  }, [rootDir]);
+  }, [rootDir, refreshKey]);
 
   // Filter runs by regex (pure computation, no state updates)
   const { filteredRuns, filterError } = useMemo(() => {
