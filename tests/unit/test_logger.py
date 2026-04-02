@@ -1,11 +1,42 @@
 """Tests for the Logger module."""
 
+import struct
+import zlib
 import tempfile
 from pathlib import Path
 
 import pytest
 
 from rinnsal.logger import LazyFigure, Logger, LogReader
+
+
+class MockFigure:
+    """Mock figure with savefig for testing (module-level to avoid
+    cloudpickle recursion issues on Python 3.13+)."""
+
+    def __init__(self, value: int):
+        self.value = value
+
+    def savefig(self, buf, **kwargs):
+        """Write a minimal valid PNG to buf."""
+        raw = b"\x00\xff\xff\xff"  # filter byte + RGB
+        compressed = zlib.compress(raw)
+
+        def _chunk(ctype, data):
+            c = ctype + data
+            return (
+                struct.pack(">I", len(data))
+                + c
+                + struct.pack(">I", zlib.crc32(c) & 0xFFFFFFFF)
+            )
+
+        png = b"\x89PNG\r\n\x1a\n"
+        png += _chunk(
+            b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0)
+        )
+        png += _chunk(b"IDAT", compressed)
+        png += _chunk(b"IEND", b"")
+        buf.write(png)
 
 
 class TestLoggerProtobuf:
@@ -48,11 +79,6 @@ class TestLoggerProtobuf:
 
     def test_log_figure(self, tmp_path: Path) -> None:
         """Test logging and reading figures."""
-
-        class MockFigure:
-            def __init__(self, value: int):
-                self.value = value
-
         with Logger(tmp_path) as logger:
             logger.add_figure("plot", MockFigure(42), it=0)
             logger.flush()
@@ -111,11 +137,6 @@ class TestLoggerProtobuf:
 
     def test_lazy_figure(self, tmp_path: Path) -> None:
         """Test lazy figure loading."""
-
-        class MockFigure:
-            def __init__(self, value: int):
-                self.value = value
-
         with Logger(tmp_path) as logger:
             for i in range(3):
                 logger.add_figure("plot", MockFigure(i), it=i)

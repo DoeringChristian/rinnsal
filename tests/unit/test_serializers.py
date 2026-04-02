@@ -45,6 +45,17 @@ class TestJSONSerializer:
         assert JSONSerializer().extension == ".json"
 
 
+class _PickleTestClass:
+    """Helper class for pickle serialization tests."""
+    def __init__(self, value):
+        self.value = value
+
+
+def _double(x):
+    """Module-level function for pickle roundtrip tests."""
+    return x * 2
+
+
 class TestPickleSerializer:
     """Tests for PickleSerializer."""
 
@@ -57,19 +68,14 @@ class TestPickleSerializer:
     def test_serialize_complex_objects(self):
         ser = PickleSerializer()
 
-        class MyClass:
-            def __init__(self, value):
-                self.value = value
-
-        obj = MyClass(42)
+        obj = _PickleTestClass(42)
         restored = ser.deserialize(ser.serialize(obj))
         assert restored.value == 42
 
-    def test_serialize_lambda(self):
+    def test_serialize_function(self):
         ser = PickleSerializer()
 
-        fn = lambda x: x * 2
-        restored = ser.deserialize(ser.serialize(fn))
+        restored = ser.deserialize(ser.serialize(_double))
         assert restored(10) == 20
 
     def test_extension(self):
@@ -87,10 +93,7 @@ class TestHybridSerializer:
     def test_uses_pickle_for_complex(self):
         ser = HybridSerializer()
 
-        class MyClass:
-            pass
-
-        data = ser.serialize(MyClass())
+        data = ser.serialize(_PickleTestClass(1))
         assert data.startswith(b"P")
 
     def test_roundtrip_primitives(self):
@@ -103,8 +106,7 @@ class TestHybridSerializer:
     def test_roundtrip_complex(self):
         ser = HybridSerializer()
 
-        fn = lambda x: x * 2
-        restored = ser.deserialize(ser.serialize(fn))
+        restored = ser.deserialize(ser.serialize(_double))
         assert restored(10) == 20
 
     def test_extension(self):

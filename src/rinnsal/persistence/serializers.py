@@ -75,7 +75,8 @@ class JSONSerializer(Serializer):
 class PickleSerializer(Serializer):
     """Pickle serializer for arbitrary Python objects.
 
-    Uses cloudpickle for better support of closures and lambdas.
+    Uses cloudpickle for better support of closures and lambdas,
+    with fallback to standard pickle if cloudpickle fails.
     """
 
     @property

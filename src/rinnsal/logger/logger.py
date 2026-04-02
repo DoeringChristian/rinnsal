@@ -85,15 +85,6 @@ class Logger:
 
     def _worker_loop(self) -> None:
         """Background worker that processes save operations."""
-        # Use Agg backend in worker thread to avoid tkinter
-        # "main thread is not in main loop" errors when pickling
-        # matplotlib figures.
-        try:
-            import matplotlib
-            matplotlib.use("Agg")
-        except ImportError:
-            pass
-
         while not self._stop_event.is_set() or not self._queue.empty():
             try:
                 task = self._queue.get(timeout=0.1)
@@ -112,6 +103,10 @@ class Logger:
                     self._write_checkpoint(*args)
                 elif op == "card":
                     self._write_card(*args)
+            except Exception:
+                import traceback
+                import sys
+                traceback.print_exc(file=sys.stderr)
             finally:
                 self._queue.task_done()
 
@@ -270,6 +265,14 @@ class Logger:
     def _render_to_png(self, figure: Any) -> bytes:
         """Render a matplotlib figure to PNG bytes."""
         import io
+
+        # Use Agg backend in worker thread to avoid tkinter
+        # "main thread is not in main loop" errors.
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+        except (ImportError, AttributeError):
+            pass
 
         buf = io.BytesIO()
         figure.savefig(buf, format="png", dpi=100, bbox_inches="tight")

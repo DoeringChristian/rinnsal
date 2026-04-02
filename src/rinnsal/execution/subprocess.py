@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import multiprocessing as mp
 import os
 import sys
-from concurrent.futures import Future, ProcessPoolExecutor
+from concurrent.futures import BrokenExecutor, Future, ProcessPoolExecutor
 from typing import TYPE_CHECKING, Any, Callable
+
+_log = logging.getLogger(__name__)
 
 import cloudpickle
 
@@ -117,7 +120,13 @@ class SubprocessExecutor(Executor):
 
     def _get_pool(self) -> ProcessPoolExecutor:
         """Get or create the process pool."""
-        if self._pool is None:
+        if self._pool is None or self._pool._broken:
+            if self._pool is not None:
+                _log.warning("Replacing broken process pool")
+                try:
+                    self._pool.shutdown(wait=False, cancel_futures=True)
+                except Exception:
+                    pass
             self._pool = ProcessPoolExecutor(
                 max_workers=self._max_workers,
                 mp_context=self._mp_context,
@@ -151,8 +160,8 @@ class SubprocessExecutor(Executor):
         serialized_args = cloudpickle.dumps(resolved_args)
         serialized_kwargs = cloudpickle.dumps(resolved_kwargs)
 
-        # Submit to pool
-        future = pool.submit(
+        # Submit to pool (retry once if pool is broken)
+        submit_args = (
             _worker_execute,
             serialized_func,
             serialized_args,
@@ -161,6 +170,14 @@ class SubprocessExecutor(Executor):
             remapped_pythonpath,
             self._checkpoint_path,
         )
+        try:
+            future = pool.submit(*submit_args)
+        except BrokenExecutor:
+            _log.warning(
+                "Process pool broken (worker crash / OOM?), creating new pool"
+            )
+            pool = self._get_pool()  # _get_pool detects _broken, recreates
+            future = pool.submit(*submit_args)
 
         # Wrap the future to return ExecutionResult
         result_future: Future[ExecutionResult] = Future()
@@ -195,6 +212,20 @@ class SubprocessExecutor(Executor):
                             error=error,
                         )
                     )
+            except BrokenExecutor as e:
+                _log.warning(
+                    "Worker process terminated abruptly (OOM / signal): %s", e
+                )
+                result_future.set_result(
+                    ExecutionResult(
+                        value=None,
+                        success=False,
+                        error=RuntimeError(
+                            f"Worker process terminated abruptly "
+                            f"(possible OOM): {e}"
+                        ),
+                    )
+                )
             except Exception as e:
                 result_future.set_result(
                     ExecutionResult(
@@ -262,7 +293,13 @@ class ForkExecutor(Executor):
 
     def _get_pool(self) -> ProcessPoolExecutor:
         """Get or create the fork-based process pool."""
-        if self._pool is None:
+        if self._pool is None or self._pool._broken:
+            if self._pool is not None:
+                _log.warning("Replacing broken process pool")
+                try:
+                    self._pool.shutdown(wait=False, cancel_futures=True)
+                except Exception:
+                    pass
             self._mp_context = mp.get_context("fork")
             self._pool = ProcessPoolExecutor(
                 max_workers=self._max_workers,
@@ -297,8 +334,8 @@ class ForkExecutor(Executor):
         serialized_args = cloudpickle.dumps(resolved_args)
         serialized_kwargs = cloudpickle.dumps(resolved_kwargs)
 
-        # Submit to pool
-        future = pool.submit(
+        # Submit to pool (retry once if pool is broken)
+        submit_args = (
             _worker_execute,
             serialized_func,
             serialized_args,
@@ -307,6 +344,14 @@ class ForkExecutor(Executor):
             remapped_pythonpath,
             self._checkpoint_path,
         )
+        try:
+            future = pool.submit(*submit_args)
+        except BrokenExecutor:
+            _log.warning(
+                "Process pool broken (worker crash / OOM?), creating new pool"
+            )
+            pool = self._get_pool()
+            future = pool.submit(*submit_args)
 
         # Wrap the future
         result_future: Future[ExecutionResult] = Future()
@@ -341,6 +386,20 @@ class ForkExecutor(Executor):
                             error=error,
                         )
                     )
+            except BrokenExecutor as e:
+                _log.warning(
+                    "Worker process terminated abruptly (OOM / signal): %s", e
+                )
+                result_future.set_result(
+                    ExecutionResult(
+                        value=None,
+                        success=False,
+                        error=RuntimeError(
+                            f"Worker process terminated abruptly "
+                            f"(possible OOM): {e}"
+                        ),
+                    )
+                )
             except Exception as e:
                 result_future.set_result(
                     ExecutionResult(

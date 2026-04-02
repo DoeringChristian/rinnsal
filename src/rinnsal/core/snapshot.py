@@ -565,16 +565,15 @@ def use_snapshot(
     """
     _, snapshot_path = _resolve_snapshot_hash(hash, flow, db_path)
 
-    # Remap sys.path
+    # Remap sys.path so new imports pick up snapshot versions.
+    # We do NOT invalidate sys.modules — in-process module swapping
+    # breaks pickle/cloudpickle identity checks. Like Metaflow/MLflow/Ray,
+    # snapshot replay should run in a separate process for full isolation.
     original_path = sys.path.copy()
     remapped = build_pythonpath(snapshot_path)
     sys.path = remapped.split(os.pathsep)
-
-    # Clear project modules so imports pick up snapshot versions
-    _invalidate_project_modules(snapshot_path)
 
     try:
         yield snapshot_path
     finally:
         sys.path = original_path
-        _invalidate_project_modules(None)
