@@ -253,6 +253,24 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
     setEditing(false);
   };
 
+  /** Merge a scalar slot into a target panel: change its panelId and move it adjacent to the panel's slots. */
+  const mergeScalarIntoPanel = (dragged: CompareSlot, targetPid: number) => {
+    const newSlots = slots.filter((s) => !(s.type === "scalar" && s.run === dragged.run && s.tag === dragged.tag));
+    // Find last slot of target panel
+    let lastTargetIdx = -1;
+    newSlots.forEach((s, i) => {
+      if (s.type === "scalar" && (s.scalarPanelId ?? 0) === targetPid) lastTargetIdx = i;
+    });
+    const merged = { ...dragged, scalarPanelId: targetPid };
+    if (lastTargetIdx >= 0) {
+      newSlots.splice(lastTargetIdx + 1, 0, merged);
+    } else {
+      newSlots.push(merged);
+    }
+    onUpdate({ ...group, slots: newSlots });
+    setDragFromIdx(null);
+  };
+
   const linkedIterations = useMemo(() => {
     const set = new Set<number>();
     for (const s of slots) { if (s.linked) for (const it of s.iterations) set.add(it); }
@@ -485,11 +503,7 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                           clearDragSlot();
                           const alreadyHere = panelSlotData.some((x) => x.run === dragged.run && x.tag === dragged.tag);
                           if (!alreadyHere) {
-                            const updated = slots.map((s) =>
-                              s.type === "scalar" && s.run === dragged.run && s.tag === dragged.tag
-                                ? { ...s, scalarPanelId: pid } : s
-                            );
-                            onUpdate({ ...group, slots: updated });
+                            mergeScalarIntoPanel(dragged, pid);
                           }
                           setDragFromIdx(null);
                           return;
@@ -529,14 +543,9 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                         const dragged = getDragSlot();
                         if (dragged && dragged.type === "scalar") {
                           clearDragSlot();
-                          // Don't merge if already in this panel
                           const alreadyHere = panelSlotData.some((s) => s.run === dragged.run && s.tag === dragged.tag);
                           if (!alreadyHere) {
-                            const updated = slots.map((s) =>
-                              s.type === "scalar" && s.run === dragged.run && s.tag === dragged.tag
-                                ? { ...s, scalarPanelId: pid } : s
-                            );
-                            onUpdate({ ...group, slots: updated });
+                            mergeScalarIntoPanel(dragged, pid);
                           }
                           setDragFromIdx(null);
                           return;
@@ -613,11 +622,7 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                                 clearDragSlot();
                                 const alreadyHere = panelSlotData.some((x) => x.run === dragged.run && x.tag === dragged.tag);
                                 if (!alreadyHere) {
-                                  const updated = slots.map((x) =>
-                                    x.type === "scalar" && x.run === dragged.run && x.tag === dragged.tag
-                                      ? { ...x, scalarPanelId: pid } : x
-                                  );
-                                  onUpdate({ ...group, slots: updated });
+                                  mergeScalarIntoPanel(dragged, pid);
                                 }
                                 setDragFromIdx(null);
                               }
