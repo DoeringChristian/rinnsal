@@ -245,6 +245,7 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
   const [mergeTargetPid, setMergeTargetPid] = useState<number | null>(null);
   const [panelDropIdx, setPanelDropIdx] = useState<{ idx: number; side: "left" | "right" } | null>(null);
   const [cardDropIdx, setCardDropIdx] = useState<{ idx: number; side: "left" | "right" } | null>(null);
+  const [dragPanelPid, setDragPanelPid] = useState<number | null>(null); // set when dragging a whole panel
   const { slots } = group;
 
   const commitName = () => {
@@ -322,7 +323,7 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
     setDragFromIdx(null);
   };
 
-  const handleSlotDragEnd = () => { setDragFromIdx(null); setDragOverIdx(null); setMergeTargetPid(null); setPanelDropIdx(null); setCardDropIdx(null); };
+  const handleSlotDragEnd = () => { setDragFromIdx(null); setDragOverIdx(null); setMergeTargetPid(null); setPanelDropIdx(null); setCardDropIdx(null); setDragPanelPid(null); };
 
   // Shift+resize sync
   const shiftHeldRef = useRef(false);
@@ -460,6 +461,7 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                         e.dataTransfer.setData("text/x-group-id", String(group.id));
                         e.dataTransfer.effectAllowed = "move";
                         setDragFromIdx(idx);
+                        setDragPanelPid(pid);
                       }}
                       onDragEnd={handleSlotDragEnd}
                     >
@@ -668,15 +670,35 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                   onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); const r = e.currentTarget.getBoundingClientRect(); setDragOverIdx(e.clientX < r.left + r.width / 2 ? idx : idx + 1); }}
                   onDragLeave={() => setDragOverIdx(null)}
                   onDrop={(e) => {
+                    e.preventDefault(); e.stopPropagation();
                     const r = e.currentTarget.getBoundingClientRect();
                     const insertAt = e.clientX < r.left + r.width / 2 ? idx : idx + 1;
-                    // If a scalar card is dropped on a non-scalar item, separate it
+                    setDragOverIdx(null);
+
+                    // Whole scalar panel being dragged
+                    if (dragPanelPid !== null) {
+                      const panelSlotIndices = slots.map((s, i) => ({ s, i })).filter(({ s }) => s.type === "scalar" && (s.scalarPanelId ?? 0) === dragPanelPid).map(({ i }) => i);
+                      if (panelSlotIndices.length > 0) {
+                        // Remove panel slots and reinsert at target position
+                        const panelItems = panelSlotIndices.map((i) => slots[i]);
+                        const newSlots = slots.filter((_, i) => !panelSlotIndices.includes(i));
+                        // Adjust insert position for removed items before it
+                        let adj = insertAt;
+                        for (const pi of panelSlotIndices) { if (pi < insertAt) adj--; }
+                        newSlots.splice(adj, 0, ...panelItems);
+                        onUpdate({ ...group, slots: newSlots });
+                        setDragFromIdx(null);
+                        setDragPanelPid(null);
+                        return;
+                      }
+                    }
+
+                    // Single scalar card dropped on non-scalar = separate
                     let slotData: CompareSlot | null = null;
                     try { const raw = e.dataTransfer.getData("application/json"); if (raw) slotData = JSON.parse(raw); } catch {}
                     if (!slotData) slotData = getDragSlot();
                     if (slotData && slotData.type === "scalar" && dragFromIdx !== null) {
-                      e.preventDefault(); e.stopPropagation();
-                      clearDragSlot(); setDragOverIdx(null);
+                      clearDragSlot();
                       const maxPid = Math.max(0, ...slots.filter((x) => x.type === "scalar").map((x) => x.scalarPanelId ?? 0));
                       const newSlots = [...slots];
                       const [moved] = newSlots.splice(dragFromIdx, 1);
@@ -686,6 +708,7 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                       setDragFromIdx(null);
                       return;
                     }
+
                     handleSlotDrop(e, insertAt);
                   }}
                 >
