@@ -243,6 +243,8 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
   const [sliderActiveIdx, setSliderActiveIdx] = useState<number | null>(null);
   const [mergeTargetPid, setMergeTargetPid] = useState<number | null>(null);
+  const [panelDropIdx, setPanelDropIdx] = useState<{ idx: number; side: "left" | "right" } | null>(null);
+  const [cardDropIdx, setCardDropIdx] = useState<{ idx: number; side: "left" | "right" } | null>(null);
   const { slots } = group;
 
   const commitName = () => {
@@ -302,7 +304,7 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
     setDragFromIdx(null);
   };
 
-  const handleSlotDragEnd = () => { setDragFromIdx(null); setDragOverIdx(null); };
+  const handleSlotDragEnd = () => { setDragFromIdx(null); setDragOverIdx(null); setMergeTargetPid(null); setPanelDropIdx(null); setCardDropIdx(null); };
 
   // Shift+resize sync
   const shiftHeldRef = useRef(false);
@@ -385,21 +387,49 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                 const panelIndices = scalarPanels.get(pid) || [idx];
                 const panelSlotData = panelIndices.map((i) => slots[i]);
 
+                const lastPanelIdx = panelIndices[panelIndices.length - 1];
+
                 return (
                   <div
                     key={`sp-${pid}`}
-                    className={`w-full bg-white rounded-lg border p-3 transition-colors ${dragOverIdx === idx && mergeTargetPid !== pid ? "border-t-blue-500 border-t-[3px]" : "border-gray-200"}`}
+                    className="w-full bg-white rounded-lg border border-gray-200 p-3"
+                    style={{
+                      borderLeft: panelDropIdx?.idx === pid && panelDropIdx.side === "left" ? "3px solid #3b82f6" : undefined,
+                      borderRight: panelDropIdx?.idx === pid && panelDropIdx.side === "right" ? "3px solid #3b82f6" : undefined,
+                    }}
                     onDragOver={(e) => {
                       e.preventDefault();
-                      // Only show rearrange indicator if NOT showing merge
-                      if (mergeTargetPid === null) setDragOverIdx(idx);
+                      if (mergeTargetPid !== null) return;
+                      setCardDropIdx(null); // clear card-level indicator
+                      const r = e.currentTarget.getBoundingClientRect();
+                      const side = e.clientY < r.top + r.height / 2 ? "left" : "right";
+                      setPanelDropIdx({ idx: pid, side });
                     }}
-                    onDragLeave={() => { if (mergeTargetPid === null) setDragOverIdx(null); }}
+                    onDragLeave={() => setPanelDropIdx(null)}
                     onDrop={(e) => {
                       e.preventDefault();
-                      if (mergeTargetPid !== null) return; // let the cards area handle merge
-                      setDragOverIdx(null);
-                      handleSlotDrop(e, idx);
+                      const side = panelDropIdx?.side || "left";
+                      setPanelDropIdx(null);
+                      if (mergeTargetPid !== null) return;
+
+                      const dragged = getDragSlot();
+                      // Scalar card from THIS panel onto chart area = separate
+                      if (dragged && dragged.type === "scalar" && (dragged.scalarPanelId ?? 0) === pid && dragFromIdx !== null && panelIndices.length > 1) {
+                        clearDragSlot();
+                        const maxPid = Math.max(0, ...slots.filter((x) => x.type === "scalar").map((x) => x.scalarPanelId ?? 0));
+                        const newSlots = [...slots];
+                        const [moved] = newSlots.splice(dragFromIdx, 1);
+                        const movedWithNewPid = { ...moved, scalarPanelId: maxPid + 1 };
+                        const insertAt = side === "left" ? Math.min(idx, newSlots.length) : Math.min(lastPanelIdx, newSlots.length);
+                        newSlots.splice(insertAt, 0, movedWithNewPid);
+                        onUpdate({ ...group, slots: newSlots });
+                        setDragFromIdx(null);
+                        return;
+                      }
+
+                      // Normal reorder
+                      const insertAt = side === "left" ? idx : lastPanelIdx + 1;
+                      handleSlotDrop(e, insertAt);
                     }}
                   >
                     {/* Drag handle for moving the whole panel */}
@@ -417,13 +447,66 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                     >
                       {"⋮⋮⋮"}
                     </div>
-                    <ScalarGroupChart
-                      slots={panelSlotData.map((s) => ({
-                        run: s.run, tag: s.tag,
-                        it: s.linked ? closestIt(s.iterations, globalIt) : s.localIt,
-                      }))}
-                      globalIt={globalIt}
-                    />
+                    {/* Chart area — dropping a same-panel card here separates it */}
+                    <div
+                      onDragOver={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setCardDropIdx(null);
+                        setMergeTargetPid(null);
+                        const r = e.currentTarget.getBoundingClientRect();
+                        const side = e.clientY < r.top + r.height / 2 ? "left" : "right";
+                        setPanelDropIdx({ idx: pid, side });
+                      }}
+                      onDragLeave={() => setPanelDropIdx(null)}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        const side = panelDropIdx?.side || "left";
+                        setPanelDropIdx(null);
+                        setCardDropIdx(null);
+
+                        const dragged = getDragSlot();
+                        if (dragged && dragged.type === "scalar" && (dragged.scalarPanelId ?? 0) === pid && dragFromIdx !== null && panelIndices.length > 1) {
+                          clearDragSlot();
+                          const maxPid = Math.max(0, ...slots.filter((x) => x.type === "scalar").map((x) => x.scalarPanelId ?? 0));
+                          const newSlots = [...slots];
+                          const [moved] = newSlots.splice(dragFromIdx, 1);
+                          const movedWithNewPid = { ...moved, scalarPanelId: maxPid + 1 };
+                          const insertAt = side === "left" ? Math.min(idx, newSlots.length) : Math.min(lastPanelIdx, newSlots.length);
+                          newSlots.splice(insertAt, 0, movedWithNewPid);
+                          onUpdate({ ...group, slots: newSlots });
+                          setDragFromIdx(null);
+                          return;
+                        }
+
+                        // External drop: merge if scalar, otherwise reorder
+                        if (dragged && dragged.type === "scalar") {
+                          clearDragSlot();
+                          const alreadyHere = panelSlotData.some((x) => x.run === dragged.run && x.tag === dragged.tag);
+                          if (!alreadyHere) {
+                            const updated = slots.map((s) =>
+                              s.type === "scalar" && s.run === dragged.run && s.tag === dragged.tag
+                                ? { ...s, scalarPanelId: pid } : s
+                            );
+                            onUpdate({ ...group, slots: updated });
+                          }
+                          setDragFromIdx(null);
+                          return;
+                        }
+
+                        const insertAt = side === "left" ? idx : lastPanelIdx + 1;
+                        handleSlotDrop(e, insertAt);
+                      }}
+                    >
+                      <ScalarGroupChart
+                        slots={panelSlotData.map((s) => ({
+                          run: s.run, tag: s.tag,
+                          it: s.linked ? closestIt(s.iterations, globalIt) : s.localIt,
+                        }))}
+                        globalIt={globalIt}
+                      />
+                    </div>
                     {/* Cards area — this is the drop target for merging scalars */}
                     <div
                       className={`flex flex-wrap gap-2 mt-2 p-1 rounded transition-colors ${mergeTargetPid === pid ? "bg-blue-50 ring-2 ring-blue-400" : ""}`}
@@ -465,10 +548,16 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                         const runName = s.run.split("/").pop() || s.run;
                         const color = getRunColor(s.run);
                         const curIt = s.linked ? closestIt(s.iterations, globalIt) : s.localIt;
+                        const cardShowLeft = cardDropIdx?.idx === sIdx && cardDropIdx.side === "left";
+                        const cardShowRight = cardDropIdx?.idx === sIdx && cardDropIdx.side === "right";
                         return (
                           <div
                             key={`sc-${sIdx}`}
                             className="bg-gray-50 rounded border border-gray-200 px-2.5 py-1.5 cursor-grab active:cursor-grabbing hover:border-blue-300 transition-colors"
+                            style={{
+                              borderLeft: cardShowLeft ? "3px solid #3b82f6" : undefined,
+                              borderRight: cardShowRight ? "3px solid #3b82f6" : undefined,
+                            }}
                             draggable
                             onDragStart={(e) => {
                               e.stopPropagation();
@@ -477,6 +566,61 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                               e.dataTransfer.effectAllowed = "move";
                               setDragSlot(s);
                               setDragFromIdx(sIdx);
+                            }}
+                            onDragOver={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setPanelDropIdx(null); // clear panel-level indicator
+                              const dragged = getDragSlot();
+                              if (dragged && dragged.type === "scalar" && (dragged.scalarPanelId ?? 0) === pid) {
+                                // Same panel: show reorder indicator on card
+                                setMergeTargetPid(null);
+                                const r = e.currentTarget.getBoundingClientRect();
+                                const side = e.clientX < r.left + r.width / 2 ? "left" : "right";
+                                setCardDropIdx({ idx: sIdx, side });
+                              } else if (dragged && dragged.type === "scalar") {
+                                // Different panel: show merge
+                                setCardDropIdx(null);
+                                setMergeTargetPid(pid);
+                              }
+                            }}
+                            onDragLeave={() => { setCardDropIdx(null); setMergeTargetPid(null); }}
+                            onDrop={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              setCardDropIdx(null);
+                              setPanelDropIdx(null);
+                              setMergeTargetPid(null);
+
+                              const dragged = getDragSlot();
+                              if (!dragged) return;
+
+                              if (dragged.type === "scalar" && (dragged.scalarPanelId ?? 0) === pid) {
+                                // Same panel: reorder
+                                clearDragSlot();
+                                if (dragFromIdx !== null && dragFromIdx !== sIdx) {
+                                  const r = e.currentTarget.getBoundingClientRect();
+                                  const insertAt = e.clientX < r.left + r.width / 2 ? sIdx : sIdx + 1;
+                                  const newSlots = [...slots];
+                                  const [moved] = newSlots.splice(dragFromIdx, 1);
+                                  const adj = insertAt > dragFromIdx ? insertAt - 1 : insertAt;
+                                  newSlots.splice(adj, 0, moved);
+                                  onUpdate({ ...group, slots: newSlots });
+                                }
+                                setDragFromIdx(null);
+                              } else if (dragged.type === "scalar") {
+                                // Different panel: merge
+                                clearDragSlot();
+                                const alreadyHere = panelSlotData.some((x) => x.run === dragged.run && x.tag === dragged.tag);
+                                if (!alreadyHere) {
+                                  const updated = slots.map((x) =>
+                                    x.type === "scalar" && x.run === dragged.run && x.tag === dragged.tag
+                                      ? { ...x, scalarPanelId: pid } : x
+                                  );
+                                  onUpdate({ ...group, slots: updated });
+                                }
+                                setDragFromIdx(null);
+                              }
                             }}
                             onDragEnd={() => { handleSlotDragEnd(); setMergeTargetPid(null); }}
                           >
