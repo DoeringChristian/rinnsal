@@ -536,21 +536,6 @@ interface AddToCompareButtonProps {
 function AddToCompareButton({ groups, onAdd }: AddToCompareButtonProps) {
   const [open, setOpen] = useState(false);
 
-  // 0 groups: create new
-  // 1 group: add directly to it
-  if (groups.length <= 1) {
-    return (
-      <button
-        onClick={() => onAdd(groups.length === 1 ? groups[0].id : null)}
-        title="Add to comparison"
-        className="w-6 h-6 flex items-center justify-center rounded-full border border-gray-300 text-gray-400 hover:border-blue-400 hover:text-blue-600 hover:bg-blue-50 transition-colors text-sm"
-      >
-        +
-      </button>
-    );
-  }
-
-  // 2+ groups: show dropdown
   return (
     <div className="relative">
       <button
