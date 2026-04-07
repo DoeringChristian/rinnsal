@@ -243,8 +243,9 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: ScalarGr
       } else {
         xArr = points.map((p) => p.it);
       }
-      const mult = s.multiplier || 1;
-      const off = s.offset || 0;
+      // Only apply multiplier/offset when y-axis is unlinked
+      const mult = s.yLinked ? 1 : (s.multiplier || 1);
+      const off = s.yLinked ? 0 : (s.offset || 0);
       const yArr = points.map((p) => p.value * mult + off);
       for (const x of xArr) xSet.add(x);
       perSeries.push({ x: xArr, y: yArr });
@@ -265,14 +266,16 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: ScalarGr
         aligned.push(sortedX.map((xv) => map.get(xv) ?? null) as (number | null)[]);
       }
       const runName = s.run.split("/").pop() || s.run;
-      const mult = s.multiplier || 1;
-      const off = s.offset || 0;
       let label = `${runName} / ${s.tag}`;
-      if (mult !== 1 || off !== 0) {
-        const parts: string[] = [];
-        if (mult !== 1) parts.push(`×${mult}`);
-        if (off !== 0) parts.push(`${off >= 0 ? "+" : ""}${off}`);
-        label += ` (${parts.join(" ")})`;
+      if (!s.yLinked) {
+        const m = s.multiplier || 1;
+        const o = s.offset || 0;
+        if (m !== 1 || o !== 0) {
+          const parts: string[] = [];
+          if (m !== 1) parts.push(`×${m}`);
+          if (o !== 0) parts.push(`${o >= 0 ? "+" : ""}${o}`);
+          label += ` (${parts.join(" ")})`;
+        }
       }
       seriesCfg.push({
         label,
