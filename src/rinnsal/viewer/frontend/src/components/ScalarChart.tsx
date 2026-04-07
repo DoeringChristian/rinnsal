@@ -5,12 +5,15 @@ import { ScalarData } from "../lib/api";
 import { getRunColor } from "./RunSelector";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { LazyRender } from "./LazyRender";
+import { CompareGroup, CompareSlot, AddToCompareButton } from "./CompareView";
 
 interface ScalarChartProps {
   data: Map<string, ScalarData>;
+  compareGroups?: CompareGroup[];
+  onAddToCompare?: (slot: CompareSlot, groupId: number | null) => void;
 }
 
-export default function ScalarChart({ data }: ScalarChartProps) {
+export default function ScalarChart({ data, compareGroups = [], onAddToCompare }: ScalarChartProps) {
   const allTags = useMemo(() => {
     const tags = new Set<string>();
     for (const runData of data.values()) {
@@ -34,7 +37,7 @@ export default function ScalarChart({ data }: ScalarChartProps) {
       {allTags.map((tag) => (
         <CollapsibleSection key={tag} title={tag}>
           <LazyRender>
-            <ScalarTagChart tag={tag} data={data} />
+            <ScalarTagChart tag={tag} data={data} compareGroups={compareGroups} onAddToCompare={onAddToCompare} />
           </LazyRender>
         </CollapsibleSection>
       ))}
@@ -45,6 +48,8 @@ export default function ScalarChart({ data }: ScalarChartProps) {
 interface ScalarTagChartProps {
   tag: string;
   data: Map<string, ScalarData>;
+  compareGroups?: CompareGroup[];
+  onAddToCompare?: (slot: CompareSlot, groupId: number | null) => void;
 }
 
 function buildChartData(
@@ -89,9 +94,10 @@ function buildChartData(
   return { data: aligned, runs };
 }
 
-function ScalarTagChart({ tag, data }: ScalarTagChartProps) {
+function ScalarTagChart({ tag, data, compareGroups = [], onAddToCompare }: ScalarTagChartProps) {
   const [logScale, setLogScale] = useState(false);
   const [relativeTime, setRelativeTime] = useState(false);
+  const [cursorValues, setCursorValues] = useState<(number | null)[]>([]);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
@@ -152,6 +158,7 @@ function ScalarTagChart({ tag, data }: ScalarTagChartProps) {
         {
           width: container.clientWidth || 800,
           height: 300,
+          legend: { show: false },
           scales: {
             x: { auto: true },
             y: { auto: true, distr: logScale ? 3 : 1 },
@@ -196,6 +203,17 @@ function ScalarTagChart({ tag, data }: ScalarTagChartProps) {
                   });
                 }
                 u.setSelect({ left: 0, width: 0, top: 0, height: 0 }, false);
+              },
+            ],
+            setCursor: [
+              (u: uPlot) => {
+                const idx = u.cursor.idx;
+                if (idx == null) { setCursorValues([]); return; }
+                const vals: (number | null)[] = [];
+                for (let i = 1; i < u.data.length; i++) {
+                  vals.push(u.data[i][idx] ?? null);
+                }
+                setCursorValues(vals);
               },
             ],
             init: [
@@ -374,7 +392,36 @@ function ScalarTagChart({ tag, data }: ScalarTagChartProps) {
         <button onClick={() => setLogScale(!logScale)} className={`px-2 py-1 text-xs rounded border transition-colors ${logScale ? "bg-blue-100 border-blue-300 text-blue-700" : "bg-white border-gray-300 text-gray-600 hover:bg-gray-50"}`}>{logScale ? "Linear Y" : "Log Y"}</button>
         <button onClick={() => setRelativeTime(!relativeTime)} className={`px-2 py-1 text-xs rounded border transition-colors ${relativeTime ? "bg-blue-100 border-blue-300 text-blue-700" : "bg-white border-gray-300 text-gray-600 hover:bg-gray-50"}`}>{relativeTime ? "Iteration" : "Rel. Time"}</button>
       </div>
-      <div ref={containerRef} style={{ height: 360, overflow: "hidden" }} />
+      <div ref={containerRef} style={{ height: 320, overflow: "hidden" }} />
+      {/* Custom legend with cursor values and compare buttons */}
+      {chartData && (
+        <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 pt-1 border-t border-gray-100">
+          {chartData.runs.map((run, i) => {
+            const runName = run.split("/").pop() || run;
+            const color = getRunColor(run);
+            const val = cursorValues[i];
+            const runData = data.get(run);
+            const points = runData?.[tag] || [];
+            const iterations = points.map((p) => p.it);
+            const slot: CompareSlot = {
+              type: "scalar", run, tag, iterations,
+              linked: true, localIt: iterations.length > 0 ? iterations[iterations.length - 1] : 0,
+            };
+            return (
+              <div key={run} className="flex items-center gap-1.5 text-xs">
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
+                <span className="text-gray-700 truncate max-w-[140px]" title={run}>{runName}</span>
+                <span className="font-mono text-gray-500 min-w-[60px]">
+                  {val != null ? val.toPrecision(4) : "—"}
+                </span>
+                {onAddToCompare && (
+                  <AddToCompareButton groups={compareGroups} onAdd={(gid) => onAddToCompare(slot, gid)} />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

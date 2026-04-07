@@ -63,6 +63,20 @@ export function figureImageUrl(runPath: string, tag: string, it: number): string
   return `/api/figure/${encodeURIComponent(runPath)}?tag=${encodeURIComponent(tag)}&it=${it}`;
 }
 
+/** Image metadata: {tag: [{it, width, height}, ...]} — no pixel data */
+export type ImageMetaData = Record<string, { it: number; width: number; height: number }[]>;
+
+export async function fetchImagesMeta(runPath: string): Promise<ImageMetaData> {
+  const response = await fetch(`/api/images/${encodeURIComponent(runPath)}`);
+  if (!response.ok) throw new Error(`Failed to fetch images: ${response.statusText}`);
+  return response.json();
+}
+
+/** Get a single image URL (loaded on demand) */
+export function imageUrl(runPath: string, tag: string, it: number): string {
+  return `/api/image/${encodeURIComponent(runPath)}?tag=${encodeURIComponent(tag)}&it=${it}`;
+}
+
 /** Card data: {task: [{it, kind, title, content, image?}, ...]} */
 export type CardData = Record<string, { it: number; kind: string; title: string; content: string; image?: string }[]>;
 

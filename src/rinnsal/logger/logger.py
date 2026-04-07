@@ -103,6 +103,8 @@ class Logger:
                     self._write_checkpoint(*args)
                 elif op == "card":
                     self._write_card(*args)
+                elif op == "image":
+                    self._write_image(*args)
             except Exception:
                 import traceback
                 import sys
@@ -240,6 +242,27 @@ class Logger:
         ts = self._get_timestamp()
         self._queue.put(("card", (task, kind, title, content, image, it, ts)))
 
+    def add_image(
+        self, tag: str, image: Any, it: int | None = None
+    ) -> None:
+        """Log an image (numpy array, torch tensor, PIL Image, or raw bytes).
+
+        Accepts:
+            - numpy ndarray (H, W) or (H, W, C) with uint8 or float values
+            - torch tensor (same shapes)
+            - PIL Image
+            - raw bytes (assumed PNG)
+
+        Args:
+            tag: Name/tag for the image.
+            image: The image data.
+            it: Iteration number. If None, uses current iteration.
+        """
+        if it is None:
+            it = self._iteration
+        ts = self._get_timestamp()
+        self._queue.put(("image", (tag, image, it, ts)))
+
     def _write_scalar(
         self, tag: str, value: float, it: int, ts: float
     ) -> None:
@@ -338,6 +361,79 @@ class Logger:
         event.iteration = it
         event.card.CopyFrom(
             Card(task=task, kind=kind, title=title, content=content, image=image)
+        )
+        self._event_writer.write(event)
+
+    def _convert_to_png(self, image: Any) -> tuple[bytes, int, int]:
+        """Convert image data to PNG bytes. Returns (png_bytes, width, height)."""
+        import io
+
+        # Raw bytes — assume PNG
+        if isinstance(image, bytes):
+            return image, 0, 0
+
+        # PIL Image
+        try:
+            from PIL import Image as PILImage
+            if isinstance(image, PILImage.Image):
+                buf = io.BytesIO()
+                image.save(buf, format="PNG")
+                return buf.getvalue(), image.width, image.height
+        except ImportError:
+            pass
+
+        # Torch tensor → numpy
+        try:
+            import torch
+            if isinstance(image, torch.Tensor):
+                image = image.detach().cpu().numpy()
+        except ImportError:
+            pass
+
+        # Numpy array → PIL → PNG
+        import numpy as np
+        if isinstance(image, np.ndarray):
+            from PIL import Image as PILImage
+
+            arr = image
+            # Float images: clamp to [0, 1] and convert to uint8
+            if arr.dtype.kind == "f":
+                arr = np.clip(arr, 0, 1)
+                arr = (arr * 255).astype(np.uint8)
+
+            # (H, W) grayscale
+            if arr.ndim == 2:
+                pil = PILImage.fromarray(arr, mode="L")
+            # (H, W, 1) grayscale
+            elif arr.ndim == 3 and arr.shape[2] == 1:
+                pil = PILImage.fromarray(arr[:, :, 0], mode="L")
+            # (H, W, 3) RGB
+            elif arr.ndim == 3 and arr.shape[2] == 3:
+                pil = PILImage.fromarray(arr, mode="RGB")
+            # (H, W, 4) RGBA
+            elif arr.ndim == 3 and arr.shape[2] == 4:
+                pil = PILImage.fromarray(arr, mode="RGBA")
+            else:
+                raise ValueError(f"Unsupported image shape: {arr.shape}")
+
+            buf = io.BytesIO()
+            pil.save(buf, format="PNG")
+            return buf.getvalue(), pil.width, pil.height
+
+        raise TypeError(f"Unsupported image type: {type(image)}")
+
+    def _write_image(
+        self, tag: str, image: Any, it: int, ts: float
+    ) -> None:
+        from rinnsal.logger.events_pb2 import Event, Image
+
+        png_data, width, height = self._convert_to_png(image)
+
+        event = Event()
+        event.timestamp = ts
+        event.iteration = it
+        event.image.CopyFrom(
+            Image(tag=tag, data=png_data, width=width, height=height, format="png")
         )
         self._event_writer.write(event)
 

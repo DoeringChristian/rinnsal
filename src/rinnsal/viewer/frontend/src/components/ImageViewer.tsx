@@ -1,17 +1,17 @@
 import { useMemo, useState } from "react";
-import { FigureMetaData, figureImageUrl } from "../lib/api";
+import { ImageMetaData, imageUrl } from "../lib/api";
 import { getRunColor } from "./RunSelector";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { CompareGroup, CompareSlot, AddToCompareButton, setDragSlot } from "./CompareView";
 
-interface FigureViewerProps {
-  data: Map<string, FigureMetaData>;
+interface ImageViewerProps {
+  data: Map<string, ImageMetaData>;
   selectedRuns: string[];
   compareGroups: CompareGroup[];
   onAddToCompare: (slot: CompareSlot, groupId: number | null) => void;
 }
 
-export default function FigureViewer({ data, selectedRuns, compareGroups, onAddToCompare }: FigureViewerProps) {
+export default function ImageViewer({ data, selectedRuns, compareGroups, onAddToCompare }: ImageViewerProps) {
   const allTags = useMemo(() => {
     const tags = new Set<string>();
     for (const runData of data.values()) {
@@ -21,24 +21,24 @@ export default function FigureViewer({ data, selectedRuns, compareGroups, onAddT
   }, [data]);
 
   if (allTags.length === 0) {
-    return <p className="text-gray-500 text-center mt-8">No figures logged in selected runs.</p>;
+    return <p className="text-gray-500 text-center mt-8">No images logged in selected runs.</p>;
   }
 
   return (
     <div className="space-y-6">
       {allTags.map((tag) => (
         <CollapsibleSection key={tag} title={tag}>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {Array.from(data).map(([run, runData]) => {
-              const figs = runData[tag];
-              if (!figs || figs.length === 0) return null;
+              const imgs = runData[tag];
+              if (!imgs || imgs.length === 0) return null;
               return (
-                <FigureRunCard
+                <ImageRunCard
                   key={run}
                   run={run}
                   runPath={selectedRuns.find((r) => r === run) || run}
                   tag={tag}
-                  figures={figs}
+                  images={imgs}
                   color={getRunColor(run)}
                   compareGroups={compareGroups}
                   onAddToCompare={onAddToCompare}
@@ -52,25 +52,25 @@ export default function FigureViewer({ data, selectedRuns, compareGroups, onAddT
   );
 }
 
-interface FigureRunCardProps {
+interface ImageRunCardProps {
   run: string;
   runPath: string;
   tag: string;
-  figures: { it: number }[];
+  images: { it: number; width: number; height: number }[];
   color: string;
   compareGroups: CompareGroup[];
   onAddToCompare: (slot: CompareSlot, groupId: number | null) => void;
 }
 
-function FigureRunCard({ run, runPath, tag, figures, color, compareGroups, onAddToCompare }: FigureRunCardProps) {
-  const [selectedIdx, setSelectedIdx] = useState(figures.length - 1);
+function ImageRunCard({ run, runPath, tag, images, color, compareGroups, onAddToCompare }: ImageRunCardProps) {
+  const [selectedIdx, setSelectedIdx] = useState(images.length - 1);
   const runName = run.split("/").pop() || run;
-  const currentFigure = figures[selectedIdx];
-  const imgUrl = figureImageUrl(runPath, tag, currentFigure.it);
+  const current = images[selectedIdx];
+  const imgSrc = imageUrl(runPath, tag, current.it);
 
   const slot: CompareSlot = {
-    type: "figure", run, tag, iterations: figures.map((f) => f.it),
-    linked: true, localIt: figures[figures.length - 1].it,
+    type: "image", run, tag, iterations: images.map((i) => i.it),
+    linked: true, localIt: images[images.length - 1].it,
   };
 
   const handleDragStart = (e: React.DragEvent) => {
@@ -84,16 +84,16 @@ function FigureRunCard({ run, runPath, tag, figures, color, compareGroups, onAdd
       <div className="flex items-center justify-between mb-3">
         <span className="font-medium" style={{ color }}>{runName}</span>
         <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-500">it:{currentFigure.it}</span>
+          <span className="text-sm text-gray-500">it:{current.it}</span>
           <AddToCompareButton groups={compareGroups} onAdd={(gid) => onAddToCompare(slot, gid)} />
         </div>
       </div>
-      {figures.length > 1 && (
+      {images.length > 1 && (
         <div className="mb-3">
-          <input type="range" min={0} max={figures.length - 1} value={selectedIdx} onChange={(e) => setSelectedIdx(parseInt(e.target.value))} className="w-full" />
+          <input type="range" min={0} max={images.length - 1} value={selectedIdx} onChange={(e) => setSelectedIdx(parseInt(e.target.value))} className="w-full" />
         </div>
       )}
-      <img src={imgUrl} alt={`${runName} - ${tag} @ ${currentFigure.it}`} className="max-w-full rounded" loading="lazy" />
+      <img src={imgSrc} alt={`${runName} - ${tag} @ ${current.it}`} className="max-w-full rounded" loading="lazy" />
     </div>
   );
 }

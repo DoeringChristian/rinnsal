@@ -98,6 +98,34 @@ def get_figure_image(
     return Response(status_code=404, content=b"Figure not found")
 
 
+@app.get("/api/images/{run_path:path}")
+def get_images_meta(run_path: str) -> dict:
+    """Get image metadata (no pixel data). Returns {tag: [{it, width, height}]}."""
+    cache = get_cache(_resolve_run_path(run_path))
+    result: dict[str, list[dict]] = {}
+    for tag, data in cache.images.items():
+        result[tag] = [
+            {"it": it, "width": w, "height": h}
+            for it, _png, w, h in data
+        ]
+    return result
+
+
+@app.get("/api/image/{run_path:path}")
+def get_image(
+    run_path: str,
+    tag: str = Query(...),
+    it: int = Query(...),
+) -> Response:
+    """Get a single image as PNG."""
+    cache = get_cache(_resolve_run_path(run_path))
+    images = cache.images.get(tag, [])
+    for img_it, png_data, _w, _h in images:
+        if img_it == it:
+            return Response(content=png_data, media_type="image/png")
+    return Response(status_code=404, content=b"Image not found")
+
+
 @app.get("/api/cards/{run_path:path}")
 def get_cards(run_path: str) -> dict:
     """Get card data for a run. Returns {task: [{it, kind, title, content, image?}, ...]}."""

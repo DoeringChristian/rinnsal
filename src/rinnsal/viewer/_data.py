@@ -76,6 +76,7 @@ class RunCache:
         "scalars",
         "text",
         "figures",
+        "images",
         "file_mtime",
         "file_size",
     )
@@ -84,6 +85,7 @@ class RunCache:
         self.scalars: dict[str, list[tuple[int, float, float | None]]] = {}
         self.text: dict[str, list[tuple[int, str]]] = {}
         self.figures: dict[str, list[tuple[int, bytes, bytes, bool]]] = {}
+        self.images: dict[str, list[tuple[int, bytes, int, int]]] = {}  # tag → [(it, png_bytes, w, h)]
         self.file_mtime: float = 0.0
         self.file_size: int = 0
 
@@ -98,6 +100,7 @@ class RunCache:
         self.scalars.clear()
         self.text.clear()
         self.figures.clear()
+        self.images.clear()
 
         reader = EventFileReader(events_path)
         for event in reader:
@@ -134,6 +137,19 @@ class RunCache:
                     )
                 )
 
+            elif data_type == "image":
+                tag = event.image.tag
+                if tag not in self.images:
+                    self.images[tag] = []
+                self.images[tag].append(
+                    (
+                        it,
+                        bytes(event.image.data),
+                        event.image.width,
+                        event.image.height,
+                    )
+                )
+
         # Sort all by iteration
         for tag in self.scalars:
             self.scalars[tag].sort(key=lambda x: x[0])
@@ -141,6 +157,8 @@ class RunCache:
             self.text[tag].sort(key=lambda x: x[0])
         for tag in self.figures:
             self.figures[tag].sort(key=lambda x: x[0])
+        for tag in self.images:
+            self.images[tag].sort(key=lambda x: x[0])
 
     def is_stale(self, events_path: Path) -> bool:
         """Check if the file has changed since we last loaded."""

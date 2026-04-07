@@ -3,47 +3,28 @@ import {
   fetchScalars,
   fetchText,
   fetchFiguresMeta,
+  fetchImagesMeta,
   fetchCards,
   ScalarData,
   TextData,
   FigureMetaData,
+  ImageMetaData,
   CardData,
 } from "../lib/api";
 
-export type Tab = "scalars" | "text" | "figures" | "cards";
-
-/** Per-run data for the active tab type */
-export interface RunScalars {
-  /** tag → [{it, value, ts}] */
-  [tag: string]: { it: number; value: number; ts: number }[];
-}
-
-export interface RunText {
-  [tag: string]: { it: number; value: string }[];
-}
-
-export interface RunFigures {
-  [tag: string]: { it: number }[];
-}
-
-export interface RunCards {
-  [task: string]: { it: number; kind: string; title: string; content: string; image?: string }[];
-}
+export type Tab = "scalars" | "text" | "figures" | "images" | "cards" | "compare";
 
 interface UseEventsResult {
   scalars: Map<string, ScalarData>;
   text: Map<string, TextData>;
   figures: Map<string, FigureMetaData>;
+  images: Map<string, ImageMetaData>;
   cards: Map<string, CardData>;
   isLoading: boolean;
   error: string | null;
   refresh: () => void;
 }
 
-/**
- * Fetch data for selected runs, only for the active tab type.
- * Scalars/text/figures metadata are tiny (KB). Images loaded on demand.
- */
 export function useEvents(
   selectedRuns: string[],
   activeTab: Tab,
@@ -51,30 +32,34 @@ export function useEvents(
   const [scalars, setScalars] = useState<Map<string, ScalarData>>(new Map());
   const [text, setText] = useState<Map<string, TextData>>(new Map());
   const [figures, setFigures] = useState<Map<string, FigureMetaData>>(new Map());
+  const [images, setImages] = useState<Map<string, ImageMetaData>>(new Map());
   const [cards, setCards] = useState<Map<string, CardData>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Ref to current cache for the fetch callback
-  const cacheRef = useRef({ scalars, text, figures, cards });
-  cacheRef.current = { scalars, text, figures, cards };
+  const cacheRef = useRef({ scalars, text, figures, images, cards });
+  cacheRef.current = { scalars, text, figures, images, cards };
 
-  // Stabilize selectedRuns by content
   const selectedRunsKey = selectedRuns.join("\0");
   const stableRuns = useMemo(() => selectedRuns, [selectedRunsKey]);
 
   const fetchTab = useCallback(async (tab: Tab, runs: string[]) => {
+    // "compare" tab doesn't fetch — slots fetch their own data
+    if (tab === "compare") return;
+
     const cache = cacheRef.current;
     const getMap = () => {
       switch (tab) {
         case "scalars": return cache.scalars;
         case "text": return cache.text;
         case "figures": return cache.figures;
+        case "images": return cache.images;
         case "cards": return cache.cards;
       }
     };
 
     const existing = getMap();
+    if (!existing) return;
     const toFetch = runs.filter((r) => !existing.has(r));
     if (toFetch.length === 0) return;
 
@@ -91,15 +76,16 @@ export function useEvents(
               case "scalars": return [run, await fetchScalars(run)] as const;
               case "text": return [run, await fetchText(run)] as const;
               case "figures": return [run, await fetchFiguresMeta(run)] as const;
+              case "images": return [run, await fetchImagesMeta(run)] as const;
               case "cards": return [run, await fetchCards(run)] as const;
             }
           })
         );
 
-        // Update the appropriate state
         const setter = tab === "scalars" ? setScalars
           : tab === "text" ? setText
           : tab === "figures" ? setFigures
+          : tab === "images" ? setImages
           : setCards;
 
         setter((prev: Map<string, any>) => {
@@ -126,17 +112,16 @@ export function useEvents(
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fetch data when tab or selection changes
   useEffect(() => {
     if (stableRuns.length === 0) {
       setScalars(new Map());
       setText(new Map());
       setFigures(new Map());
+      setImages(new Map());
       setCards(new Map());
       return;
     }
 
-    // Prune deselected runs from active tab's cache
     const selectedSet = new Set(stableRuns);
     const prune = <T,>(prev: Map<string, T>): Map<string, T> => {
       let needsPrune = false;
@@ -154,21 +139,22 @@ export function useEvents(
     if (activeTab === "scalars") setScalars(prune);
     else if (activeTab === "text") setText(prune);
     else if (activeTab === "figures") setFigures(prune);
+    else if (activeTab === "images") setImages(prune);
     else if (activeTab === "cards") setCards(prune);
 
     fetchTab(activeTab, stableRuns);
   }, [stableRuns, activeTab, fetchTab]);
 
   const refresh = useCallback(() => {
-    // Invalidate cache so fetchTab re-fetches all runs (without clearing the UI)
     cacheRef.current = {
       scalars: new Map(),
       text: new Map(),
       figures: new Map(),
+      images: new Map(),
       cards: new Map(),
     };
     fetchTab(activeTab, stableRuns);
   }, [stableRuns, activeTab, fetchTab]);
 
-  return { scalars, text, figures, cards, isLoading, error, refresh };
+  return { scalars, text, figures, images, cards, isLoading, error, refresh };
 }

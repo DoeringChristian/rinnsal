@@ -17,6 +17,7 @@ message Event {
     Figure figure = 5;
     Checkpoint checkpoint = 6;
     Card card = 7;
+    Image image = 8;
   }
 }
 
@@ -48,4 +49,12 @@ message Card {
   string title = 3;          // Optional title
   string content = 4;        // Text/HTML/markdown content
   bytes image = 5;           // PNG bytes for image cards
+}
+
+message Image {
+  string tag = 1;
+  bytes data = 2;            // PNG-encoded bytes
+  int32 width = 3;
+  int32 height = 4;
+  string format = 5;         // "png", "jpeg", etc.
 }
