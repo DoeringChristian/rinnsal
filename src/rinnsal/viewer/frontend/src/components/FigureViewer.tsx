@@ -168,6 +168,7 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
   // Drag start for individual slots (to move between groups/windows)
   const [dragFromIdx, setDragFromIdx] = useState<number | null>(null);
   const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+  const [sliderActiveIdx, setSliderActiveIdx] = useState<number | null>(null);
 
   const handleSlotDragStart = (e: React.DragEvent, slot: CompareSlot, idx: number) => {
     e.dataTransfer.setData("application/json", JSON.stringify(slot));
@@ -319,7 +320,7 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
               <div
                 key={`${slot.run}-${slot.tag}-${idx}`}
                 ref={(el) => setSlotRef(idx, el)}
-                className={`bg-white rounded-lg border border-gray-200 p-3 cursor-grab active:cursor-grabbing relative ${dragFromIdx === idx ? "opacity-40" : ""}`}
+                className={`bg-white rounded-lg border border-gray-200 p-3 relative ${dragFromIdx === idx ? "opacity-40" : ""} ${sliderActiveIdx === idx ? "" : "cursor-grab active:cursor-grabbing"}`}
                 style={{
                   resize: "horizontal",
                   overflow: "auto",
@@ -328,7 +329,7 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                   borderLeft: showLeftIndicator ? "3px solid #3b82f6" : undefined,
                   borderRight: showRightIndicator ? "3px solid #3b82f6" : undefined,
                 }}
-                draggable
+                draggable={sliderActiveIdx !== idx}
                 onDragStart={(e) => handleSlotDragStart(e, slot, idx)}
                 onDragEnd={handleSlotDragEnd}
                 onDragOver={(e) => {
@@ -365,7 +366,11 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                   </div>
                 </div>
                 {!slot.linked && slot.iterations.length > 1 && (
-                  <div className="mb-2">
+                  <div
+                    className="mb-2"
+                    onMouseEnter={() => setSliderActiveIdx(idx)}
+                    onMouseLeave={() => setSliderActiveIdx(null)}
+                  >
                     <input type="range" min={0} max={slot.iterations.length - 1} value={slot.iterations.indexOf(slot.localIt)} onChange={(e) => setLocalIt(idx, slot.iterations[parseInt(e.target.value)])} className="w-full" />
                   </div>
                 )}
