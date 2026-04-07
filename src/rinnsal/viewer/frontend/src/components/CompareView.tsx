@@ -92,7 +92,7 @@ function SlotContent({ slot, it }: { slot: CompareSlot; it: number }) {
 }
 
 /** Renders multiple scalar series in one uPlot chart with iteration marker. */
-function ScalarGroupChart({ slots, globalIt }: { slots: { run: string; tag: string; it: number }[]; globalIt: number }) {
+function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: { run: string; tag: string; it: number }[]; globalIt: number; onSetIteration?: (it: number) => void }) {
   const [allData, setAllData] = useState<Map<string, { it: number; value: number }[]>>(new Map());
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
@@ -190,7 +190,27 @@ function ScalarGroupChart({ slots, globalIt }: { slots: { run: string; tag: stri
         series: seriesCfg,
         cursor: { show: true, focus: { prox: 30 } },
         focus: { alpha: 0.3 },
-        hooks: { draw: [drawMarker] },
+        hooks: {
+          draw: [drawMarker],
+          init: [
+            (u: uPlot) => {
+              u.over.addEventListener("dblclick", (e) => {
+                if (!onSetIteration) return;
+                const left = e.clientX - u.over.getBoundingClientRect().left;
+                const xVal = u.posToVal(left, "x");
+                // Snap to nearest iteration in the data
+                const xData = u.data[0] as number[];
+                let bestIt = xData[0];
+                let bestDist = Math.abs(bestIt - xVal);
+                for (let i = 1; i < xData.length; i++) {
+                  const dist = Math.abs(xData[i] - xVal);
+                  if (dist < bestDist) { bestIt = xData[i]; bestDist = dist; }
+                }
+                onSetIteration(bestIt);
+              });
+            },
+          ],
+        },
       },
       aligned as uPlot.AlignedData,
       containerRef.current,
@@ -521,6 +541,16 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                           it: s.linked ? closestIt(s.iterations, globalIt) : s.localIt,
                         }))}
                         globalIt={globalIt}
+                        onSetIteration={(it) => {
+                          // Find closest index in linkedIterations and set the global slider
+                          let bestIdx = 0;
+                          let bestDist = Math.abs(linkedIterations[0] - it);
+                          for (let i = 1; i < linkedIterations.length; i++) {
+                            const dist = Math.abs(linkedIterations[i] - it);
+                            if (dist < bestDist) { bestIdx = i; bestDist = dist; }
+                          }
+                          setGlobalIdx(bestIdx);
+                        }}
                       />
                     </div>
                     {/* Cards area — this is the drop target for merging scalars */}
