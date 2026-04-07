@@ -51,6 +51,11 @@ function clearDragSlot() {
   delete (window as any)[DRAG_KEY];
 }
 
+/** Check if a group already contains a slot with the same run+tag. */
+function groupHasSlot(group: CompareGroup, slot: CompareSlot): boolean {
+  return group.slots.some((s) => s.run === slot.run && s.tag === slot.tag);
+}
+
 // ─── Persistence ─────────────────────────────────────────────────
 
 const COMPARE_STORAGE_KEY = "rinnsal-compare-groups";
@@ -160,14 +165,104 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
   };
 
   // Drag start for individual slots (to move between groups/windows)
-  const handleSlotDragStart = (e: React.DragEvent, slot: CompareSlot, _idx: number) => {
+  const [dragFromIdx, setDragFromIdx] = useState<number | null>(null);
+  const [dragOverIdx, setDragOverIdx] = useState<number | null>(null);
+
+  const handleSlotDragStart = (e: React.DragEvent, slot: CompareSlot, idx: number) => {
     e.dataTransfer.setData("application/json", JSON.stringify(slot));
+    e.dataTransfer.setData("text/x-group-id", String(group.id));
     e.dataTransfer.effectAllowed = "copy";
-    setDragSlot(slot); // shared state for cross-window drops
+    setDragSlot(slot);
+    setDragFromIdx(idx);
+  };
+
+  const handleSlotDrop = (e: React.DragEvent, targetIdx: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverIdx(null);
+
+    // Check if reordering within same group
+    const sourceGroupId = e.dataTransfer.getData("text/x-group-id");
+    if (sourceGroupId === String(group.id) && dragFromIdx !== null && dragFromIdx !== targetIdx) {
+      // Reorder
+      const newSlots = [...slots];
+      const [moved] = newSlots.splice(dragFromIdx, 1);
+      newSlots.splice(targetIdx > dragFromIdx ? targetIdx - 1 : targetIdx, 0, moved);
+      onUpdate({ ...group, slots: newSlots });
+    } else {
+      // Adding from outside — use normal drop logic
+      let slotData: CompareSlot | null = null;
+      try {
+        const raw = e.dataTransfer.getData("application/json");
+        if (raw) slotData = JSON.parse(raw);
+      } catch { /* ignore */ }
+      if (!slotData) slotData = getDragSlot();
+      if (slotData) {
+        onDropSlot(slotData);
+        clearDragSlot();
+      }
+    }
+    setDragFromIdx(null);
+  };
+
+  const handleSlotDragEnd = () => {
+    setDragFromIdx(null);
+    setDragOverIdx(null);
+  };
+
+  // Track shift key for synchronized resize
+  const shiftHeldRef = useRef(false);
+  const slotRefsRef = useRef<Map<number, HTMLDivElement>>(new Map());
+
+  // Setup keyboard + resize observer on the correct window.
+  // Uses a callback ref so it works when portaled into popup windows.
+  const cleanupRef = useRef<(() => void) | null>(null);
+
+  const containerRefCallback = useCallback((el: HTMLDivElement | null) => {
+    if (cleanupRef.current) {
+      cleanupRef.current();
+      cleanupRef.current = null;
+    }
+    if (!el) return;
+
+    const ownerWindow = el.ownerDocument?.defaultView || window;
+
+    // Shift key tracking on the correct window
+    const down = (e: KeyboardEvent) => { if (e.key === "Shift") shiftHeldRef.current = true; };
+    const up = (e: KeyboardEvent) => { if (e.key === "Shift") shiftHeldRef.current = false; };
+    ownerWindow.addEventListener("keydown", down);
+    ownerWindow.addEventListener("keyup", up);
+
+    // ResizeObserver from the correct window context
+    const RO = (ownerWindow as any).ResizeObserver || ResizeObserver;
+    const observer = new RO((entries: ResizeObserverEntry[]) => {
+      if (!shiftHeldRef.current) return;
+      for (const entry of entries) {
+        const w = entry.contentRect.width + 24;
+        slotRefsRef.current.forEach((slotEl) => {
+          if (slotEl !== entry.target) {
+            slotEl.style.width = `${w}px`;
+          }
+        });
+        break;
+      }
+    });
+    slotRefsRef.current.forEach((slotEl) => observer.observe(slotEl));
+
+    cleanupRef.current = () => {
+      ownerWindow.removeEventListener("keydown", down);
+      ownerWindow.removeEventListener("keyup", up);
+      observer.disconnect();
+    };
+  }, [slots.length]);
+
+  const setSlotRef = (idx: number, el: HTMLDivElement | null) => {
+    if (el) slotRefsRef.current.set(idx, el);
+    else slotRefsRef.current.delete(idx);
   };
 
   const content = (
-    <>
+    <div ref={containerRefCallback}>
       {!group.collapsed && linkedIterations.length > 1 && (
         <div className="flex items-center gap-2 mb-3">
           <span className="text-xs text-gray-500 shrink-0">it: {globalIt}</span>
@@ -175,19 +270,47 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
         </div>
       )}
       {!group.collapsed && (
-        <div className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-start gap-2">
           {slots.map((slot, idx) => {
             const it = slot.linked ? closestIt(slot.iterations, globalIt) : slot.localIt;
             const runName = slot.run.split("/").pop() || slot.run;
             const color = getRunColor(slot.run);
             const url = figureImageUrl(slot.run, slot.tag, it);
 
+            // Show indicator line on left or right edge depending on dragOverIdx
+            const showLeftIndicator = dragOverIdx === idx;
+            const showRightIndicator = dragOverIdx === idx + 1 && idx === slots.length - 1;
+
             return (
               <div
                 key={`${slot.run}-${slot.tag}-${idx}`}
-                className="bg-white rounded-lg border border-gray-200 p-3 cursor-grab active:cursor-grabbing"
+                ref={(el) => setSlotRef(idx, el)}
+                className={`bg-white rounded-lg border border-gray-200 p-3 cursor-grab active:cursor-grabbing relative ${dragFromIdx === idx ? "opacity-40" : ""}`}
+                style={{
+                  resize: "horizontal",
+                  overflow: "auto",
+                  minWidth: 250,
+                  borderLeft: showLeftIndicator ? "3px solid #3b82f6" : undefined,
+                  borderRight: showRightIndicator ? "3px solid #3b82f6" : undefined,
+                }}
                 draggable
                 onDragStart={(e) => handleSlotDragStart(e, slot, idx)}
+                onDragEnd={handleSlotDragEnd}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  // Determine if cursor is on left or right half
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const midX = rect.left + rect.width / 2;
+                  setDragOverIdx(e.clientX < midX ? idx : idx + 1);
+                }}
+                onDragLeave={() => setDragOverIdx(null)}
+                onDrop={(e) => {
+                  const rect = e.currentTarget.getBoundingClientRect();
+                  const midX = rect.left + rect.width / 2;
+                  const insertIdx = e.clientX < midX ? idx : idx + 1;
+                  handleSlotDrop(e, insertIdx);
+                }}
               >
                 <div className="flex items-center justify-between mb-2 gap-1">
                   <div className="flex-1 min-w-0">
@@ -211,16 +334,16 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                     <input type="range" min={0} max={slot.iterations.length - 1} value={slot.iterations.indexOf(slot.localIt)} onChange={(e) => setLocalIt(idx, slot.iterations[parseInt(e.target.value)])} className="w-full" />
                   </div>
                 )}
-                <img src={url} alt={`${runName} / ${slot.tag} @ ${it}`} className="w-full rounded" loading="lazy" />
+                <img src={url} alt={`${runName} / ${slot.tag} @ ${it}`} className="w-full h-auto rounded object-contain" loading="lazy" />
               </div>
             );
           })}
           {slots.length === 0 && (
-            <p className="text-xs text-gray-400 text-center py-4">Drag figures here or click + on figures below</p>
+            <p className="text-xs text-gray-400 text-center py-4 w-full">Drag figures here or click + on figures below</p>
           )}
         </div>
       )}
-    </>
+    </div>
   );
 
   if (overlay) {
@@ -347,6 +470,7 @@ function PopoutWindow({ group, onUpdate, onClose }: PopoutWindowProps) {
   };
 
   const handlePopoutDrop = (slot: CompareSlot) => {
+    if (groupHasSlot(group, slot)) return;
     onUpdate({ ...group, slots: [...group.slots, slot] });
   };
 
@@ -459,11 +583,12 @@ export default function FigureViewer({ data, selectedRuns }: FigureViewerProps) 
 
       setGroups((prev) => {
         if (groupId !== null) {
-          return prev.map((g) =>
-            g.id === groupId ? { ...g, slots: [...g.slots, newSlot] } : g,
-          );
+          return prev.map((g) => {
+            if (g.id !== groupId) return g;
+            if (groupHasSlot(g, newSlot)) return g; // no duplicates
+            return { ...g, slots: [...g.slots, newSlot] };
+          });
         }
-        // New group
         const id = nextGroupId++;
         return [...prev, { id, name: `Comparison ${id}`, slots: [newSlot], collapsed: false }];
       });
@@ -487,9 +612,11 @@ export default function FigureViewer({ data, selectedRuns }: FigureViewerProps) 
   // Handle dropping a slot onto a group — add without removing from others
   const handleDropSlot = useCallback((targetGroupId: number, slot: CompareSlot) => {
     setGroups((prev) =>
-      prev.map((g) =>
-        g.id === targetGroupId ? { ...g, slots: [...g.slots, slot] } : g,
-      ),
+      prev.map((g) => {
+        if (g.id !== targetGroupId) return g;
+        if (groupHasSlot(g, slot)) return g;
+        return { ...g, slots: [...g.slots, slot] };
+      }),
     );
   }, []);
 
