@@ -93,14 +93,19 @@ function SlotContent({ slot, it }: { slot: CompareSlot; it: number }) {
 
 /** Renders multiple scalar series in one uPlot chart with iteration marker. */
 function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: { run: string; tag: string; it: number }[]; globalIt: number; onSetIteration?: (it: number) => void }) {
-  const [allData, setAllData] = useState<Map<string, { it: number; value: number }[]>>(new Map());
+  const [allData, setAllData] = useState<Map<string, { it: number; value: number; ts: number }[]>>(new Map());
+  const [logScale, setLogScale] = useState(false);
+  const [relativeTime, setRelativeTime] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const chartRef = useRef<uPlot | null>(null);
   const prevCountRef = useRef(0);
+  const prevLogRef = useRef(false);
+  const globalItRef = useRef(globalIt);
+  globalItRef.current = globalIt;
 
   // Fetch data for all scalar slots
   useEffect(() => {
-    const toFetch = new Map<string, string[]>(); // run → [tags]
+    const toFetch = new Map<string, string[]>();
     for (const s of slots) {
       if (!toFetch.has(s.run)) toFetch.set(s.run, []);
       toFetch.get(s.run)!.push(s.tag);
@@ -111,7 +116,7 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: { run: s
         return { run, tags, d };
       })
     ).then((results) => {
-      const next = new Map<string, { it: number; value: number }[]>();
+      const next = new Map<string, { it: number; value: number; ts: number }[]>();
       for (const { run, tags, d } of results) {
         for (const tag of tags) {
           if (d[tag]) next.set(`${run}\0${tag}`, d[tag]);
@@ -125,23 +130,40 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: { run: s
   useEffect(() => {
     if (allData.size === 0 || !containerRef.current) return;
 
-    // Merge all x values
+    // Build per-series x/y arrays, using ts or it for x-axis
+    const perSeries: { x: number[]; y: number[] }[] = [];
     const xSet = new Set<number>();
-    for (const points of allData.values()) {
-      for (const p of points) xSet.add(p.it);
-    }
-    const sortedX = Array.from(xSet).sort((a, b) => a - b);
-
-    // Build aligned data
-    const aligned: (number | null)[][] = [sortedX];
-    const seriesCfg: uPlot.Series[] = [{ label: "Iteration" }];
 
     for (const s of slots) {
       const key = `${s.run}\0${s.tag}`;
       const points = allData.get(key);
-      if (!points) { aligned.push(sortedX.map(() => null)); } else {
-        const map = new Map(points.map((p) => [p.it, p.value]));
-        aligned.push(sortedX.map((x) => map.get(x) ?? null) as (number | null)[]);
+      if (!points || points.length === 0) { perSeries.push({ x: [], y: [] }); continue; }
+
+      let xArr: number[];
+      if (relativeTime) {
+        const t0 = points[0].ts;
+        xArr = points.map((p) => p.ts - t0);
+      } else {
+        xArr = points.map((p) => p.it);
+      }
+      const yArr = points.map((p) => p.value);
+      for (const x of xArr) xSet.add(x);
+      perSeries.push({ x: xArr, y: yArr });
+    }
+
+    const sortedX = Array.from(xSet).sort((a, b) => a - b);
+
+    // Build aligned data
+    const aligned: (number | null)[][] = [sortedX];
+    const seriesCfg: uPlot.Series[] = [{ label: relativeTime ? "Time (s)" : "Iteration" }];
+
+    for (let si = 0; si < slots.length; si++) {
+      const s = slots[si];
+      const { x, y } = perSeries[si];
+      if (x.length === 0) { aligned.push(sortedX.map(() => null)); } else {
+        const map = new Map<number, number>();
+        for (let i = 0; i < x.length; i++) map.set(x[i], y[i]);
+        aligned.push(sortedX.map((xv) => map.get(xv) ?? null) as (number | null)[]);
       }
       const runName = s.run.split("/").pop() || s.run;
       seriesCfg.push({
@@ -152,9 +174,11 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: { run: s
       });
     }
 
+    // Draw iteration marker using ref so it always reads the latest value
     const drawMarker = (u: uPlot) => {
+      const curIt = globalItRef.current;
       const ctx = u.ctx;
-      const xPos = u.valToPos(globalIt, "x", true);
+      const xPos = u.valToPos(curIt, "x", true);
       if (xPos < u.bbox.left || xPos > u.bbox.left + u.bbox.width) return;
       ctx.save();
       ctx.strokeStyle = "#ef4444";
@@ -167,47 +191,120 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: { run: s
       ctx.restore();
     };
 
-    const needsRecreate = !chartRef.current || slots.length !== prevCountRef.current;
+    const logChanged = logScale !== prevLogRef.current;
+    prevLogRef.current = logScale;
+    const needsRecreate = !chartRef.current || slots.length !== prevCountRef.current || logChanged;
     prevCountRef.current = slots.length;
 
     if (chartRef.current && !needsRecreate) {
       chartRef.current.setData(aligned as uPlot.AlignedData);
+      // Auto-fit with tolerance
+      if (sortedX.length > 0) {
+        const xPad = (sortedX[sortedX.length - 1] - sortedX[0]) * 0.02 || 1;
+        chartRef.current.setScale("x", { min: sortedX[0] - xPad, max: sortedX[sortedX.length - 1] + xPad });
+      }
       chartRef.current.redraw();
       return;
     }
 
     if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null; }
     containerRef.current.innerHTML = "";
+
+    // Compute initial scale with tolerance
+    let xMin = sortedX[0], xMax = sortedX[sortedX.length - 1];
+    const xPad = (xMax - xMin) * 0.02 || 1;
+    xMin -= xPad; xMax += xPad;
+
     chartRef.current = new uPlot(
       {
         width: containerRef.current.clientWidth || 400,
         height: 250,
-        scales: { x: { auto: true }, y: { auto: true } },
+        legend: { show: false },
+        scales: {
+          x: { min: xMin, max: xMax },
+          y: { auto: true, distr: logScale ? 3 : 1 },
+        },
         axes: [
-          { grid: { show: true, stroke: "#eee" }, values: (_u: uPlot, vals: number[]) => vals.map((v) => String(Math.round(v))) },
-          { grid: { show: true, stroke: "#eee" } },
+          {
+            label: relativeTime ? "Time (s)" : "Iteration",
+            grid: { show: true, stroke: "#eee" },
+            values: relativeTime
+              ? (_u: uPlot, vals: number[]) => vals.map((v) => v.toFixed(1))
+              : (_u: uPlot, vals: number[]) => vals.map((v) => String(Math.round(v))),
+          },
+          { label: "Value", grid: { show: true, stroke: "#eee" } },
         ],
         series: seriesCfg,
-        cursor: { show: true, focus: { prox: 30 } },
+        cursor: {
+          show: true,
+          focus: { prox: 30 },
+          drag: { x: true, y: true },
+          bind: {
+            mousedown: (_u: uPlot, _targ: HTMLElement, handler: Function) => {
+              return (e: MouseEvent) => { if (e.altKey) return null; return handler(e); };
+            },
+          },
+        },
         focus: { alpha: 0.3 },
         hooks: {
           draw: [drawMarker],
+          setSelect: [
+            (u: uPlot) => {
+              const { left, width } = u.select;
+              if (width > 0) {
+                u.setScale("x", { min: u.posToVal(left, "x"), max: u.posToVal(left + width, "x") });
+              }
+              u.setSelect({ left: 0, width: 0, top: 0, height: 0 }, false);
+            },
+          ],
           init: [
             (u: uPlot) => {
-              u.over.addEventListener("dblclick", (e) => {
+              const over = u.over;
+              // Double-click to set iteration
+              over.addEventListener("dblclick", (e) => {
                 if (!onSetIteration) return;
-                const left = e.clientX - u.over.getBoundingClientRect().left;
+                const left = e.clientX - over.getBoundingClientRect().left;
                 const xVal = u.posToVal(left, "x");
-                // Snap to nearest iteration in the data
                 const xData = u.data[0] as number[];
-                let bestIt = xData[0];
-                let bestDist = Math.abs(bestIt - xVal);
+                let bestIt = xData[0], bestDist = Math.abs(bestIt - xVal);
                 for (let i = 1; i < xData.length; i++) {
                   const dist = Math.abs(xData[i] - xVal);
                   if (dist < bestDist) { bestIt = xData[i]; bestDist = dist; }
                 }
                 onSetIteration(bestIt);
               });
+              // Alt+wheel zoom
+              let isPanning = false, panStartX = 0, panStartY = 0, panXMin = 0, panXMax = 0, panYMin = 0, panYMax = 0;
+              over.addEventListener("wheel", (e: WheelEvent) => {
+                if (!e.altKey) return;
+                e.preventDefault();
+                const factor = e.deltaY > 0 ? 1.1 : 1 / 1.1;
+                const cl = u.cursor.left!, ct = u.cursor.top!;
+                const xMn = u.scales.x.min!, xMx = u.scales.x.max!, yMn = u.scales.y.min!, yMx = u.scales.y.max!;
+                const xR = xMx - xMn, yR = yMx - yMn;
+                const xP = u.posToVal(cl, "x"), yP = u.posToVal(ct, "y");
+                const xRat = (xP - xMn) / xR, yRat = (yP - yMn) / yR;
+                const nxR = xR * factor, nyR = yR * factor;
+                u.batch(() => {
+                  u.setScale("x", { min: xP - xRat * nxR, max: xP + (1 - xRat) * nxR });
+                  u.setScale("y", { min: yP - yRat * nyR, max: yP + (1 - yRat) * nyR });
+                });
+              }, { passive: false });
+              // Alt+drag pan
+              over.addEventListener("mousedown", (e: MouseEvent) => {
+                if (!e.altKey) return; e.preventDefault();
+                isPanning = true; panStartX = e.clientX; panStartY = e.clientY;
+                panXMin = u.scales.x.min!; panXMax = u.scales.x.max!; panYMin = u.scales.y.min!; panYMax = u.scales.y.max!;
+                over.style.cursor = "grabbing";
+              });
+              window.addEventListener("mousemove", (e: MouseEvent) => {
+                if (!isPanning) return;
+                const pxW = u.bbox.width / devicePixelRatio, pxH = u.bbox.height / devicePixelRatio;
+                const dx = (e.clientX - panStartX) / pxW * (panXMax - panXMin);
+                const dy = (e.clientY - panStartY) / pxH * (panYMax - panYMin);
+                u.batch(() => { u.setScale("x", { min: panXMin - dx, max: panXMax - dx }); u.setScale("y", { min: panYMin + dy, max: panYMax + dy }); });
+              });
+              window.addEventListener("mouseup", () => { if (isPanning) { isPanning = false; over.style.cursor = ""; } });
             },
           ],
         },
@@ -217,14 +314,38 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: { run: s
     );
 
     return () => { if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null; } };
-  }, [allData, slots.length]);
+  }, [allData, slots.length, logScale, relativeTime]);
 
   // Redraw marker on iteration change
   useEffect(() => { if (chartRef.current) chartRef.current.redraw(); }, [globalIt]);
 
+  const resetZoom = useCallback(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+    const xData = chart.data[0] as number[];
+    if (xData.length > 0) {
+      const xPad = (xData[xData.length - 1] - xData[0]) * 0.02 || 1;
+      chart.setScale("x", { min: xData[0] - xPad, max: xData[xData.length - 1] + xPad });
+    }
+    let yMin = Infinity, yMax = -Infinity;
+    for (let s = 1; s < chart.data.length; s++) {
+      for (const v of chart.data[s]) { if (v != null) { if (v < yMin) yMin = v; if (v > yMax) yMax = v; } }
+    }
+    if (yMin < yMax) { const pad = (yMax - yMin) * 0.05 || 1; chart.setScale("y", { min: yMin - pad, max: yMax + pad }); }
+  }, []);
+
   if (allData.size === 0) return <div className="text-xs text-gray-400">Loading scalar data...</div>;
 
-  return <div ref={containerRef} style={{ height: 250, overflow: "hidden" }} />;
+  return (
+    <div>
+      <div className="flex items-center justify-end space-x-2 mb-1">
+        <button onClick={resetZoom} className="px-2 py-0.5 text-xs rounded border bg-white border-gray-300 text-gray-600 hover:bg-gray-50 transition-colors">Reset Zoom</button>
+        <button onClick={() => setLogScale(!logScale)} className={`px-2 py-0.5 text-xs rounded border transition-colors ${logScale ? "bg-blue-100 border-blue-300 text-blue-700" : "bg-white border-gray-300 text-gray-600 hover:bg-gray-50"}`}>{logScale ? "Linear Y" : "Log Y"}</button>
+        <button onClick={() => setRelativeTime(!relativeTime)} className={`px-2 py-0.5 text-xs rounded border transition-colors ${relativeTime ? "bg-blue-100 border-blue-300 text-blue-700" : "bg-white border-gray-300 text-gray-600 hover:bg-gray-50"}`}>{relativeTime ? "Iteration" : "Rel. Time"}</button>
+      </div>
+      <div ref={containerRef} style={{ height: 250, overflow: "hidden" }} />
+    </div>
+  );
 }
 
 function TextSlotContent({ run, tag, it }: { run: string; tag: string; it: number }) {

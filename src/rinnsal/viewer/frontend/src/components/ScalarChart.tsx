@@ -103,6 +103,7 @@ function ScalarTagChart({ tag, data, compareGroups = [], onAddToCompare }: Scala
   const chartRef = useRef<uPlot | null>(null);
   const chartRunsRef = useRef<string[]>([]);
   const prevLogScaleRef = useRef(logScale);
+  const prevRelTimeRef = useRef(relativeTime);
 
   const chartData = useMemo(
     () => buildChartData(data, tag, relativeTime),
@@ -126,11 +127,13 @@ function ScalarTagChart({ tag, data, compareGroups = [], onAddToCompare }: Scala
     const chart = chartRef.current;
     const prevRuns = chartRunsRef.current;
 
-    // Force full rebuild when logScale changes (distr can't be updated incrementally)
+    // Force full rebuild when logScale or relativeTime changes (axis config can't be updated incrementally)
     const logScaleChanged = logScale !== prevLogScaleRef.current;
     prevLogScaleRef.current = logScale;
+    const relTimeChanged = relativeTime !== prevRelTimeRef.current;
+    prevRelTimeRef.current = relativeTime;
 
-    if (!chart || logScaleChanged) {
+    if (!chart || logScaleChanged || relTimeChanged) {
       // First render or full rebuild (e.g. logScale changed)
       if (chartRef.current) {
         chartRef.current.destroy();
