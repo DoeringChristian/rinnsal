@@ -18,6 +18,9 @@ export interface CompareSlot {
   localIt: number;
   width?: number;
   scalarPanelId?: number; // groups scalar slots into shared charts
+  scalarMultiplier?: number; // multiplier for scalar values (default 1)
+  scalarOffset?: number; // additive offset for scalar values (default 0)
+  scalarYLinked?: boolean; // share y-axis scale with other scalars in panel (default true)
 }
 
 export interface CompareGroup {
@@ -91,6 +94,70 @@ function SlotContent({ slot, it }: { slot: CompareSlot; it: number }) {
   return <div className="text-xs text-gray-500">Card: {slot.tag} @ it:{it}</div>;
 }
 
+/** Number input that supports drag-to-adjust. Drag up/down to change value in log space (for multiplier) or linear (for offset). */
+function DragNumberInput({ value, onChange, logScale: logDrag = false, title, prefix }: {
+  value: number;
+  onChange: (v: number) => void;
+  logScale?: boolean;
+  title?: string;
+  prefix?: string;
+}) {
+  const dragRef = useRef<{ startY: number; startVal: number } | null>(null);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    dragRef.current = { startY: e.clientY, startVal: value };
+
+    const handleMouseMove = (ev: MouseEvent) => {
+      if (!dragRef.current) return;
+      const dy = dragRef.current.startY - ev.clientY; // up = positive
+      if (logDrag) {
+        // Log-space: each 50px = 10x
+        const factor = Math.pow(10, dy / 100);
+        onChange(parseFloat((dragRef.current.startVal * factor).toPrecision(4)));
+      } else {
+        // Linear: scale by current magnitude
+        const mag = Math.max(Math.abs(dragRef.current.startVal), 1) * 0.01;
+        onChange(parseFloat((dragRef.current.startVal + dy * mag).toPrecision(4)));
+      }
+    };
+
+    const handleMouseUp = () => {
+      dragRef.current = null;
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+  };
+
+  return (
+    <div className="flex items-center gap-0.5" title={title}>
+      {prefix && (
+        <span
+          className="text-xs text-gray-400 select-none cursor-ns-resize"
+          onMouseDown={handleMouseDown}
+        >
+          {prefix}
+        </span>
+      )}
+      <input
+        type="number"
+        step="any"
+        value={value}
+        onClick={(ev) => ev.stopPropagation()}
+        onMouseDown={(ev) => ev.stopPropagation()}
+        onPointerDown={(ev) => ev.stopPropagation()}
+        onChange={(ev) => { const v = parseFloat(ev.target.value); if (!isNaN(v)) onChange(v); }}
+        className="w-14 text-xs border border-gray-300 rounded px-1 py-0.5 text-center"
+        draggable={false}
+      />
+    </div>
+  );
+}
+
 /** Shows the scalar value at a given iteration. Fetches data (browser-cached). */
 function ScalarValueAt({ run, tag, it }: { run: string; tag: string; it: number }) {
   const [val, setVal] = useState<number | null>(null);
@@ -111,8 +178,17 @@ function ScalarValueAt({ run, tag, it }: { run: string; tag: string; it: number 
   return <span className="text-xs font-mono text-gray-600">{val.toPrecision(4)}</span>;
 }
 
+interface ScalarGroupSlot {
+  run: string;
+  tag: string;
+  it: number;
+  multiplier: number;
+  offset: number;
+  yLinked: boolean;
+}
+
 /** Renders multiple scalar series in one uPlot chart with iteration marker. */
-function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: { run: string; tag: string; it: number }[]; globalIt: number; onSetIteration?: (it: number) => void }) {
+function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: ScalarGroupSlot[]; globalIt: number; onSetIteration?: (it: number) => void }) {
   const [allData, setAllData] = useState<Map<string, { it: number; value: number; ts: number }[]>>(new Map());
   const [logScale, setLogScale] = useState(false);
   const [relativeTime, setRelativeTime] = useState(false);
@@ -120,6 +196,7 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: { run: s
   const chartRef = useRef<uPlot | null>(null);
   const prevCountRef = useRef(0);
   const prevLogRef = useRef(false);
+  const prevSlotKeyRef = useRef("");
   const globalItRef = useRef(globalIt);
   globalItRef.current = globalIt;
 
@@ -166,7 +243,9 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: { run: s
       } else {
         xArr = points.map((p) => p.it);
       }
-      const yArr = points.map((p) => p.value);
+      const mult = s.multiplier || 1;
+      const off = s.offset || 0;
+      const yArr = points.map((p) => p.value * mult + off);
       for (const x of xArr) xSet.add(x);
       perSeries.push({ x: xArr, y: yArr });
     }
@@ -186,12 +265,59 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: { run: s
         aligned.push(sortedX.map((xv) => map.get(xv) ?? null) as (number | null)[]);
       }
       const runName = s.run.split("/").pop() || s.run;
+      const mult = s.multiplier || 1;
+      const off = s.offset || 0;
+      let label = `${runName} / ${s.tag}`;
+      if (mult !== 1 || off !== 0) {
+        const parts: string[] = [];
+        if (mult !== 1) parts.push(`×${mult}`);
+        if (off !== 0) parts.push(`${off >= 0 ? "+" : ""}${off}`);
+        label += ` (${parts.join(" ")})`;
+      }
       seriesCfg.push({
-        label: `${runName} / ${s.tag}`,
+        label,
         stroke: getRunColor(s.run),
         width: 2,
         spanGaps: true,
+        scale: "y", // all series on same scale
       });
+    }
+
+    // Single y scale for all series
+    const scales: Record<string, any> = {
+      x: { auto: false, min: 0, max: 1 }, // will be set below
+      y: { auto: true, distr: logScale ? 3 : 1 },
+    };
+
+    // Build axes: main y-axis, plus right-side axes showing raw values for unlinked series
+    const axesCfg: uPlot.Axis[] = [
+      {
+        label: relativeTime ? "Time (s)" : "Iteration",
+        grid: { show: true, stroke: "#eee" },
+        values: relativeTime
+          ? (_u: uPlot, vals: number[]) => vals.map((v) => v.toFixed(1))
+          : (_u: uPlot, vals: number[]) => vals.map((v) => String(Math.round(v))),
+      },
+      { label: "Value", grid: { show: true, stroke: "#eee" }, scale: "y" },
+    ];
+    for (let si = 0; si < slots.length; si++) {
+      if (!slots[si].yLinked) {
+        const mult = slots[si].multiplier || 1;
+        const off = slots[si].offset || 0;
+        const color = getRunColor(slots[si].run);
+        axesCfg.push({
+          scale: "y", // same scale, different tick labels
+          side: 1,
+          grid: { show: false },
+          stroke: color,
+          ticks: { stroke: color },
+          // Show original raw values: raw = (displayed - offset) / multiplier
+          values: (_u: uPlot, vals: number[]) => vals.map((v) => {
+            const raw = (v - off) / mult;
+            return raw.toPrecision(3);
+          }),
+        } as uPlot.Axis);
+      }
     }
 
     // Draw iteration marker using ref so it always reads the latest value
@@ -213,7 +339,10 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: { run: s
 
     const logChanged = logScale !== prevLogRef.current;
     prevLogRef.current = logScale;
-    const needsRecreate = !chartRef.current || slots.length !== prevCountRef.current || logChanged;
+    // Force recreate when structure changes (series count, log scale, y-link, multiplier)
+    const slotKey = slots.map((s) => `${s.yLinked}:${s.multiplier}:${s.offset}`).join(",");
+    const needsRecreate = !chartRef.current || slots.length !== prevCountRef.current || logChanged || slotKey !== prevSlotKeyRef.current;
+    prevSlotKeyRef.current = slotKey;
     prevCountRef.current = slots.length;
 
     if (chartRef.current && !needsRecreate) {
@@ -240,20 +369,8 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: { run: s
         width: containerRef.current.clientWidth || 400,
         height: 250,
         legend: { show: false },
-        scales: {
-          x: { auto: false, min: xMin, max: xMax },
-          y: { auto: true, distr: logScale ? 3 : 1 },
-        },
-        axes: [
-          {
-            label: relativeTime ? "Time (s)" : "Iteration",
-            grid: { show: true, stroke: "#eee" },
-            values: relativeTime
-              ? (_u: uPlot, vals: number[]) => vals.map((v) => v.toFixed(1))
-              : (_u: uPlot, vals: number[]) => vals.map((v) => String(Math.round(v))),
-          },
-          { label: "Value", grid: { show: true, stroke: "#eee" } },
-        ],
+        scales: { ...scales, x: { auto: false, min: xMin, max: xMax } },
+        axes: axesCfg,
         series: seriesCfg,
         cursor: {
           show: true,
@@ -334,7 +451,8 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: { run: s
     );
 
     return () => { if (chartRef.current) { chartRef.current.destroy(); chartRef.current = null; } };
-  }, [allData, slots.length, logScale, relativeTime]);
+  }, [allData, slots.length, logScale, relativeTime,
+      slots.map((s) => `${s.yLinked}:${s.multiplier}:${s.offset}`).join(",")]);  // rebuild on yLinked/multiplier changes
 
   // Redraw marker on iteration change
   useEffect(() => { if (chartRef.current) chartRef.current.redraw(); }, [globalIt]);
@@ -680,6 +798,9 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                         slots={panelSlotData.map((s) => ({
                           run: s.run, tag: s.tag,
                           it: s.linked ? closestIt(s.iterations, globalIt) : s.localIt,
+                          multiplier: s.scalarMultiplier ?? 1,
+                          offset: s.scalarOffset ?? 0,
+                          yLinked: s.scalarYLinked !== false,
                         }))}
                         globalIt={globalIt}
                         onSetIteration={(it) => {
@@ -810,9 +931,44 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                               </div>
                               <ScalarValueAt run={s.run} tag={s.tag} it={curIt} />
                               <span className="text-xs text-gray-400 font-mono shrink-0">it:{curIt}</span>
-                              <button onClick={(ev) => { ev.stopPropagation(); toggleLink(sIdx); }} className={`px-1 py-0.5 text-xs rounded ${s.linked ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-500"}`}>
-                                {s.linked ? "\uD83D\uDD17" : "\u26D3\uFE0F"}
+                              <button
+                                onClick={(ev) => {
+                                  ev.stopPropagation();
+                                  const updated = [...slots];
+                                  updated[sIdx] = { ...updated[sIdx], scalarYLinked: !(s.scalarYLinked !== false) };
+                                  onUpdate({ ...group, slots: updated });
+                                }}
+                                title={s.scalarYLinked !== false ? "Unlink Y-axis (separate scale)" : "Link Y-axis (shared scale)"}
+                                className={`px-1 py-0.5 text-xs rounded ${s.scalarYLinked !== false ? "bg-blue-100 text-blue-700" : "bg-orange-100 text-orange-700"}`}
+                              >
+                                {s.scalarYLinked !== false ? "Y" : "Y\u2082"}
                               </button>
+                              {s.scalarYLinked === false && (
+                                <>
+                                  <DragNumberInput
+                                    value={s.scalarMultiplier ?? 1}
+                                    onChange={(v) => {
+                                      const updated = [...slots];
+                                      updated[sIdx] = { ...updated[sIdx], scalarMultiplier: v };
+                                      onUpdate({ ...group, slots: updated });
+                                    }}
+                                    logScale={true}
+                                    title="Multiplier (drag label to adjust in log space)"
+                                    prefix={"\u00D7"}
+                                  />
+                                  <DragNumberInput
+                                    value={s.scalarOffset ?? 0}
+                                    onChange={(v) => {
+                                      const updated = [...slots];
+                                      updated[sIdx] = { ...updated[sIdx], scalarOffset: v };
+                                      onUpdate({ ...group, slots: updated });
+                                    }}
+                                    logScale={false}
+                                    title="Offset (drag label to adjust)"
+                                    prefix={"+"}
+                                  />
+                                </>
+                              )}
                               <button onClick={(ev) => { ev.stopPropagation(); removeSlot(sIdx); }} className="text-gray-400 hover:text-red-500 text-sm">{"\u00D7"}</button>
                             </div>
                           </div>
