@@ -12,6 +12,7 @@ interface CompareSlot {
   iterations: number[];
   linked: boolean;
   localIt: number;
+  width?: number; // persisted width in px
 }
 
 interface CompareGroup {
@@ -214,7 +215,7 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
   const shiftHeldRef = useRef(false);
   const slotRefsRef = useRef<Map<number, HTMLDivElement>>(new Map());
 
-  // Setup keyboard + resize observer on the correct window.
+  // Setup keyboard listener + resize persistence on the correct window.
   // Uses a callback ref so it works when portaled into popup windows.
   const cleanupRef = useRef<(() => void) | null>(null);
 
@@ -227,34 +228,67 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
 
     const ownerWindow = el.ownerDocument?.defaultView || window;
 
-    // Shift key tracking on the correct window
+    // Shift key tracking
     const down = (e: KeyboardEvent) => { if (e.key === "Shift") shiftHeldRef.current = true; };
     const up = (e: KeyboardEvent) => { if (e.key === "Shift") shiftHeldRef.current = false; };
     ownerWindow.addEventListener("keydown", down);
     ownerWindow.addEventListener("keyup", up);
 
-    // ResizeObserver from the correct window context
+    // ResizeObserver for live shift-sync only (DOM-only, no state updates).
+    // Use a flag to prevent cascading: when we set a sibling's width,
+    // ignore the resulting observer callback for that sibling.
+    let syncing = false;
     const RO = (ownerWindow as any).ResizeObserver || ResizeObserver;
     const observer = new RO((entries: ResizeObserverEntry[]) => {
-      if (!shiftHeldRef.current) return;
+      if (!shiftHeldRef.current || syncing) return;
       for (const entry of entries) {
-        const w = entry.contentRect.width + 24;
+        const targetWidth = entry.target.getBoundingClientRect().width;
+        syncing = true;
         slotRefsRef.current.forEach((slotEl) => {
           if (slotEl !== entry.target) {
-            slotEl.style.width = `${w}px`;
+            slotEl.style.width = `${Math.round(targetWidth)}px`;
           }
         });
+        // Reset flag after current microtask so observer callbacks from
+        // the sibling resizes are ignored
+        requestAnimationFrame(() => { syncing = false; });
         break;
       }
     });
     slotRefsRef.current.forEach((slotEl) => observer.observe(slotEl));
 
+    // On mouseup, persist widths to state (triggers save to sessionStorage)
+    const onMouseUp = () => {
+      let changed = false;
+      const updatedSlots = [...slots];
+      slotRefsRef.current.forEach((slotEl, idx) => {
+        const w = Math.round(slotEl.getBoundingClientRect().width);
+        if (idx < updatedSlots.length && updatedSlots[idx].width !== w) {
+          updatedSlots[idx] = { ...updatedSlots[idx], width: w };
+          changed = true;
+
+          // If shift held, sync all to the same width
+          if (shiftHeldRef.current) {
+            for (let i = 0; i < updatedSlots.length; i++) {
+              updatedSlots[i] = { ...updatedSlots[i], width: w };
+            }
+            slotRefsRef.current.forEach((otherEl) => {
+              if (otherEl !== slotEl) otherEl.style.width = `${w}px`;
+            });
+          }
+        }
+      });
+      if (changed) onUpdate({ ...group, slots: updatedSlots });
+    };
+    ownerWindow.addEventListener("mouseup", onMouseUp);
+
     cleanupRef.current = () => {
       ownerWindow.removeEventListener("keydown", down);
       ownerWindow.removeEventListener("keyup", up);
+      ownerWindow.removeEventListener("mouseup", onMouseUp);
       observer.disconnect();
     };
-  }, [slots.length]);
+  }, [slots, group, onUpdate]);
 
   const setSlotRef = (idx: number, el: HTMLDivElement | null) => {
     if (el) slotRefsRef.current.set(idx, el);
@@ -290,6 +324,7 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                   resize: "horizontal",
                   overflow: "auto",
                   minWidth: 250,
+                  width: slot.width ? `${slot.width}px` : undefined,
                   borderLeft: showLeftIndicator ? "3px solid #3b82f6" : undefined,
                   borderRight: showRightIndicator ? "3px solid #3b82f6" : undefined,
                 }}
