@@ -34,7 +34,7 @@ function persistState(state: {
 }
 
 export default function App() {
-  const persisted = loadPersistedState();
+  const [persisted] = useState(loadPersistedState);
   const [rootDir, setRootDir] = useState(persisted.rootDir || "");
   const [selectedRuns, setSelectedRuns] = useState<string[]>(
     persisted.selectedRuns || [],

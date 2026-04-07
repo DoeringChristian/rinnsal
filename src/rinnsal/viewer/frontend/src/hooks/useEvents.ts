@@ -117,6 +117,15 @@ export function useEvents(
     }
   }, []);
 
+  // Force initial fetch on mount for persisted selections
+  const didInitRef = useRef(false);
+  useEffect(() => {
+    if (!didInitRef.current && stableRuns.length > 0) {
+      didInitRef.current = true;
+      fetchTab(activeTab, stableRuns);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Fetch data when tab or selection changes
   useEffect(() => {
     if (stableRuns.length === 0) {

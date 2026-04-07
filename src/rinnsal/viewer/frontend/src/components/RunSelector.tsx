@@ -45,13 +45,11 @@ export default function RunSelector({
   const [filter, setFilter] = useState("");
   const [isLoading, setIsLoading] = useState(false);
 
-  // Fetch runs when rootDir changes
   useEffect(() => {
     if (!rootDir) {
       setRuns([]);
       return;
     }
-
     setIsLoading(true);
     fetchRuns(rootDir)
       .then(setRuns)
@@ -59,7 +57,6 @@ export default function RunSelector({
       .finally(() => setIsLoading(false));
   }, [rootDir, refreshKey]);
 
-  // Filter runs by regex (pure computation, no state updates)
   const { filteredRuns, filterError } = useMemo(() => {
     if (!filter) {
       return { filteredRuns: runs, filterError: null };
@@ -75,7 +72,6 @@ export default function RunSelector({
     }
   }, [runs, filter]);
 
-  // Limit rendered DOM nodes
   const visibleRuns = filteredRuns.slice(0, MAX_VISIBLE);
   const hasMore = filteredRuns.length > MAX_VISIBLE;
 
@@ -87,10 +83,30 @@ export default function RunSelector({
     }
   };
 
+  const soloRun = (runPath: string) => {
+    onSelectionChange([runPath]);
+  };
+
+  // Toggle all visible (filtered) runs
+  const visiblePaths = visibleRuns.map((r) => r.path);
+  const allVisibleSelected = visiblePaths.length > 0 &&
+    visiblePaths.every((p) => selectedRuns.includes(p));
+
+  const toggleAll = () => {
+    if (allVisibleSelected) {
+      // Deselect all visible, keep others
+      const visibleSet = new Set(visiblePaths);
+      onSelectionChange(selectedRuns.filter((r) => !visibleSet.has(r)));
+    } else {
+      // Select all visible, keep existing
+      const existing = new Set(selectedRuns);
+      const toAdd = visiblePaths.filter((p) => !existing.has(p));
+      onSelectionChange([...selectedRuns, ...toAdd]);
+    }
+  };
+
   if (!rootDir) {
-    return (
-      <p className="text-sm text-gray-500">Enter a directory path above.</p>
-    );
+    return <p className="text-sm text-gray-500">Enter a directory path above.</p>;
   }
 
   if (isLoading) {
@@ -116,37 +132,54 @@ export default function RunSelector({
         )}
       </div>
 
-      <p className="text-xs text-gray-500">
-        {filteredRuns.length}/{runs.length} runs
-      </p>
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-gray-500">
+          {filteredRuns.length}/{runs.length} runs
+        </p>
+        <button
+          onClick={toggleAll}
+          className="text-xs text-blue-600 hover:text-blue-800 transition-colors"
+        >
+          {allVisibleSelected ? "Deselect all" : "Select all"}
+        </button>
+      </div>
 
-      <div className="space-y-1">
+      <div className="space-y-0.5">
         {visibleRuns.map((run) => {
           const isSelected = selectedRuns.includes(run.path);
           const color = getRunColor(run.path);
 
           return (
-            <label
+            <div
               key={run.path}
-              className="flex items-center space-x-2 cursor-pointer hover:bg-gray-50 p-1 rounded"
+              className="flex items-center group hover:bg-gray-50 rounded px-1 py-0.5"
             >
-              <input
-                type="checkbox"
-                checked={isSelected}
-                onChange={() => toggleRun(run.path)}
-                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-              />
-              <span
-                className="text-sm truncate"
-                style={{
-                  color: isSelected ? color : undefined,
-                  fontWeight: isSelected ? 600 : undefined,
-                }}
-                title={run.path}
+              <label className="flex items-center space-x-2 cursor-pointer flex-1 min-w-0">
+                <input
+                  type="checkbox"
+                  checked={isSelected}
+                  onChange={() => toggleRun(run.path)}
+                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 shrink-0"
+                />
+                <span
+                  className="text-sm truncate"
+                  style={{
+                    color: isSelected ? color : undefined,
+                    fontWeight: isSelected ? 600 : undefined,
+                  }}
+                  title={run.path}
+                >
+                  {run.name}
+                </span>
+              </label>
+              <button
+                onClick={() => soloRun(run.path)}
+                title="Solo — deselect all others"
+                className="opacity-0 group-hover:opacity-100 text-xs text-gray-400 hover:text-blue-600 px-1 shrink-0 transition-opacity"
               >
-                {run.name}
-              </span>
-            </label>
+                solo
+              </button>
+            </div>
           );
         })}
         {hasMore && (
