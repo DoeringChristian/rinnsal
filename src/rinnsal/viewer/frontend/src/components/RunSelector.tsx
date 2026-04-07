@@ -8,29 +8,30 @@ interface RunSelectorProps {
   refreshKey?: number;
 }
 
-const RUN_COLORS = [
-  "#1f77b4",
-  "#ff7f0e",
-  "#2ca02c",
-  "#d62728",
-  "#9467bd",
-  "#8c564b",
-  "#e377c2",
-  "#7f7f7f",
-];
+/**
+ * Generate visually distinct colors using golden-angle spacing in HSL.
+ * Each run gets a unique hue based on its index in the full run list,
+ * ensuring adjacent runs never share a color.
+ */
+const GOLDEN_ANGLE = 137.508;
 
-function hashString(str: string): number {
-  let hash = 0;
-  for (let i = 0; i < str.length; i++) {
-    hash = ((hash << 5) - hash) + str.charCodeAt(i);
-    hash |= 0;
+// Cache: run path → assigned index (stable across renders)
+const colorIndexMap = new Map<string, number>();
+let nextColorIndex = 0;
+
+function assignColorIndex(run: string): number {
+  let idx = colorIndexMap.get(run);
+  if (idx === undefined) {
+    idx = nextColorIndex++;
+    colorIndexMap.set(run, idx);
   }
-  return Math.abs(hash);
+  return idx;
 }
 
 export function getRunColor(run: string): string {
-  const idx = hashString(run);
-  return RUN_COLORS[idx % RUN_COLORS.length];
+  const idx = assignColorIndex(run);
+  const hue = (idx * GOLDEN_ANGLE) % 360;
+  return `hsl(${hue}, 70%, 45%)`;
 }
 
 const MAX_VISIBLE = 200;
@@ -87,18 +88,15 @@ export default function RunSelector({
     onSelectionChange([runPath]);
   };
 
-  // Toggle all visible (filtered) runs
   const visiblePaths = visibleRuns.map((r) => r.path);
   const allVisibleSelected = visiblePaths.length > 0 &&
     visiblePaths.every((p) => selectedRuns.includes(p));
 
   const toggleAll = () => {
     if (allVisibleSelected) {
-      // Deselect all visible, keep others
       const visibleSet = new Set(visiblePaths);
       onSelectionChange(selectedRuns.filter((r) => !visibleSet.has(r)));
     } else {
-      // Select all visible, keep existing
       const existing = new Set(selectedRuns);
       const toAdd = visiblePaths.filter((p) => !existing.has(p));
       onSelectionChange([...selectedRuns, ...toAdd]);
@@ -152,33 +150,38 @@ export default function RunSelector({
           return (
             <div
               key={run.path}
-              className="flex items-center group hover:bg-gray-50 rounded px-1 py-0.5"
+              className="flex items-start group hover:bg-gray-50 rounded py-0.5 gap-1"
             >
-              <label className="flex items-center space-x-2 cursor-pointer flex-1 min-w-0">
-                <input
-                  type="checkbox"
-                  checked={isSelected}
-                  onChange={() => toggleRun(run.path)}
-                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 shrink-0"
-                />
-                <span
-                  className="text-sm truncate"
-                  style={{
-                    color: isSelected ? color : undefined,
-                    fontWeight: isSelected ? 600 : undefined,
-                  }}
-                  title={run.path}
-                >
-                  {run.name}
-                </span>
-              </label>
+              {/* Solo button — round, left of checkbox */}
               <button
                 onClick={() => soloRun(run.path)}
-                title="Solo — deselect all others"
-                className="opacity-0 group-hover:opacity-100 text-xs text-gray-400 hover:text-blue-600 px-1 shrink-0 transition-opacity"
+                title="Solo — show only this run"
+                className="w-4 h-4 mt-0.5 rounded-full shrink-0 opacity-30 hover:opacity-100 transition-opacity border border-gray-300 hover:border-gray-500"
+                style={{ backgroundColor: color }}
+              />
+              {/* Checkbox */}
+              <input
+                type="checkbox"
+                checked={isSelected}
+                onChange={() => toggleRun(run.path)}
+                className="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 shrink-0 cursor-pointer"
+              />
+              {/* Run name — wrapping */}
+              <span
+                className="text-sm break-all leading-tight flex-1 cursor-pointer"
+                style={{
+                  color: isSelected ? color : undefined,
+                }}
+                title={run.path}
+                onClick={() => toggleRun(run.path)}
               >
-                solo
-              </button>
+                {run.name}
+              </span>
+              {/* Color dot on right — always present to keep layout stable */}
+              <span
+                className="w-2 h-2 mt-1.5 rounded-full shrink-0"
+                style={{ backgroundColor: isSelected ? color : "transparent" }}
+              />
             </div>
           );
         })}

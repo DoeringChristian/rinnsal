@@ -160,10 +160,13 @@ export function useEvents(
   }, [stableRuns, activeTab, fetchTab]);
 
   const refresh = useCallback(() => {
-    if (activeTab === "scalars") setScalars(new Map());
-    else if (activeTab === "text") setText(new Map());
-    else if (activeTab === "figures") setFigures(new Map());
-    else if (activeTab === "cards") setCards(new Map());
+    // Invalidate cache so fetchTab re-fetches all runs (without clearing the UI)
+    cacheRef.current = {
+      scalars: new Map(),
+      text: new Map(),
+      figures: new Map(),
+      cards: new Map(),
+    };
     fetchTab(activeTab, stableRuns);
   }, [stableRuns, activeTab, fetchTab]);
 

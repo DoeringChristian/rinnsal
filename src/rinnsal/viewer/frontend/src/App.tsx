@@ -94,8 +94,11 @@ export default function App() {
 
   return (
     <div className="flex h-screen bg-gray-50">
-      {/* Sidebar */}
-      <aside className="w-72 bg-white border-r border-gray-200 flex flex-col">
+      {/* Sidebar — resizable */}
+      <aside
+        className="bg-white border-r border-gray-200 flex flex-col overflow-hidden"
+        style={{ width: 288, minWidth: 200, maxWidth: 600, resize: "horizontal", overflow: "auto" }}
+      >
         <header className="p-4 border-b border-gray-200 flex items-center justify-between">
           <h1 className="text-xl font-semibold text-gray-800">Rinnsal</h1>
           <button

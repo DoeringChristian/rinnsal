@@ -374,7 +374,7 @@ function ScalarTagChart({ tag, data }: ScalarTagChartProps) {
         <button onClick={() => setLogScale(!logScale)} className={`px-2 py-1 text-xs rounded border transition-colors ${logScale ? "bg-blue-100 border-blue-300 text-blue-700" : "bg-white border-gray-300 text-gray-600 hover:bg-gray-50"}`}>{logScale ? "Linear Y" : "Log Y"}</button>
         <button onClick={() => setRelativeTime(!relativeTime)} className={`px-2 py-1 text-xs rounded border transition-colors ${relativeTime ? "bg-blue-100 border-blue-300 text-blue-700" : "bg-white border-gray-300 text-gray-600 hover:bg-gray-50"}`}>{relativeTime ? "Iteration" : "Rel. Time"}</button>
       </div>
-      <div ref={containerRef} />
+      <div ref={containerRef} style={{ height: 360, overflow: "hidden" }} />
     </div>
   );
 }
