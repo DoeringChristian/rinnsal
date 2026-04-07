@@ -411,7 +411,7 @@ function ScalarTagChart({ tag, data, compareGroups = [], onAddToCompare }: Scala
               linked: true, localIt: iterations.length > 0 ? iterations[iterations.length - 1] : 0,
             };
             return (
-              <div key={run} className="flex items-center gap-1.5 text-xs">
+              <div key={run} className="flex items-center gap-1.5 text-xs bg-gray-50 rounded border border-gray-200 px-2 py-1">
                 <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: color }} />
                 <span className="text-gray-700 truncate max-w-[140px]" title={run}>{runName}</span>
                 <span className="font-mono text-gray-500 min-w-[60px]">

@@ -221,7 +221,7 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: { run: s
         height: 250,
         legend: { show: false },
         scales: {
-          x: { min: xMin, max: xMax },
+          x: { auto: false, min: xMin, max: xMax },
           y: { auto: true, distr: logScale ? 3 : 1 },
         },
         axes: [
