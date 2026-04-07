@@ -91,6 +91,26 @@ function SlotContent({ slot, it }: { slot: CompareSlot; it: number }) {
   return <div className="text-xs text-gray-500">Card: {slot.tag} @ it:{it}</div>;
 }
 
+/** Shows the scalar value at a given iteration. Fetches data (browser-cached). */
+function ScalarValueAt({ run, tag, it }: { run: string; tag: string; it: number }) {
+  const [val, setVal] = useState<number | null>(null);
+  useEffect(() => {
+    fetchScalars(run).then((d) => {
+      const points = d[tag];
+      if (!points || points.length === 0) return;
+      // Find closest iteration
+      let best = points[0];
+      for (const p of points) {
+        if (Math.abs(p.it - it) < Math.abs(best.it - it)) best = p;
+      }
+      setVal(best.value);
+    }).catch(() => {});
+  }, [run, tag, it]);
+
+  if (val === null) return <span className="text-xs text-gray-300">...</span>;
+  return <span className="text-xs font-mono text-gray-600">{val.toPrecision(4)}</span>;
+}
+
 /** Renders multiple scalar series in one uPlot chart with iteration marker. */
 function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: { run: string; tag: string; it: number }[]; globalIt: number; onSetIteration?: (it: number) => void }) {
   const [allData, setAllData] = useState<Map<string, { it: number; value: number; ts: number }[]>>(new Map());
@@ -788,6 +808,7 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                                 <div className="text-xs font-medium truncate" style={{ color }}>{runName}</div>
                                 <div className="text-xs text-gray-500 truncate">{s.tag}</div>
                               </div>
+                              <ScalarValueAt run={s.run} tag={s.tag} it={curIt} />
                               <span className="text-xs text-gray-400 font-mono shrink-0">it:{curIt}</span>
                               <button onClick={(ev) => { ev.stopPropagation(); toggleLink(sIdx); }} className={`px-1 py-0.5 text-xs rounded ${s.linked ? "bg-blue-100 text-blue-700" : "bg-gray-200 text-gray-500"}`}>
                                 {s.linked ? "\uD83D\uDD17" : "\u26D3\uFE0F"}
