@@ -188,7 +188,12 @@ interface ScalarGroupSlot {
 }
 
 /** Renders multiple scalar series in one uPlot chart with iteration marker. */
-function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: ScalarGroupSlot[]; globalIt: number; onSetIteration?: (it: number) => void }) {
+function ScalarGroupChart({ slots, globalIt, onSetIteration, onSlotScaleChange }: {
+  slots: ScalarGroupSlot[];
+  globalIt: number;
+  onSetIteration?: (it: number) => void;
+  onSlotScaleChange?: (slotIdx: number, multiplier: number, offset: number) => void;
+}) {
   const [allData, setAllData] = useState<Map<string, { it: number; value: number; ts: number }[]>>(new Map());
   const [logScale, setLogScale] = useState(false);
   const [relativeTime, setRelativeTime] = useState(false);
@@ -199,6 +204,10 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: ScalarGr
   const prevSlotKeyRef = useRef("");
   const globalItRef = useRef(globalIt);
   globalItRef.current = globalIt;
+  const onSlotScaleChangeRef = useRef(onSlotScaleChange);
+  onSlotScaleChangeRef.current = onSlotScaleChange;
+  const slotsRef = useRef(slots);
+  slotsRef.current = slots;
 
   // Fetch data for all scalar slots
   useEffect(() => {
@@ -445,6 +454,59 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration }: { slots: ScalarGr
                 u.batch(() => { u.setScale("x", { min: panXMin - dx, max: panXMax - dx }); u.setScale("y", { min: panYMin + dy, max: panYMax + dy }); });
               });
               window.addEventListener("mouseup", () => { if (isPanning) { isPanning = false; over.style.cursor = ""; } });
+
+              // Make right-side axis ticks draggable for scale/offset adjustment
+              // uPlot axes are direct children of the root element, axes[2+] are right-side
+              const root = u.root;
+              const axisEls = root.querySelectorAll(".u-axis");
+              // axes[0] = x, axes[1] = y-left, axes[2+] = right-side (unlinked)
+              let unlinkedIdx = 0;
+              for (let ai = 2; ai < axisEls.length; ai++) {
+                const axEl = axisEls[ai] as HTMLElement;
+                const capturedIdx = unlinkedIdx;
+                axEl.style.cursor = "ns-resize";
+
+                axEl.addEventListener("mousedown", (e: MouseEvent) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const curSlots = slotsRef.current;
+                  // Find the capturedIdx-th unlinked slot
+                  let count = 0;
+                  let targetSi = -1;
+                  for (let si = 0; si < curSlots.length; si++) {
+                    if (!curSlots[si].yLinked) {
+                      if (count === capturedIdx) { targetSi = si; break; }
+                      count++;
+                    }
+                  }
+                  if (targetSi < 0) return;
+
+                  const startY = e.clientY;
+                  const startMult = curSlots[targetSi].multiplier;
+                  const startOff = curSlots[targetSi].offset;
+                  const mode = e.shiftKey ? "offset" : "mult";
+
+                  const onMove = (ev: MouseEvent) => {
+                    const dy = startY - ev.clientY;
+                    if (mode === "mult") {
+                      const factor = Math.pow(10, dy / 150);
+                      onSlotScaleChangeRef.current?.(targetSi, parseFloat((startMult * factor).toPrecision(4)), startOff);
+                    } else {
+                      const mag = Math.max(Math.abs(startOff), 1) * 0.01;
+                      onSlotScaleChangeRef.current?.(targetSi, startMult, parseFloat((startOff + dy * mag).toPrecision(4)));
+                    }
+                  };
+                  const onUp = () => {
+                    window.removeEventListener("mousemove", onMove);
+                    window.removeEventListener("mouseup", onUp);
+                    document.body.style.cursor = "";
+                  };
+                  document.body.style.cursor = "ns-resize";
+                  window.addEventListener("mousemove", onMove);
+                  window.addEventListener("mouseup", onUp);
+                });
+                unlinkedIdx++;
+              }
             },
           ],
         },
@@ -815,6 +877,14 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                             if (dist < bestDist) { bestIdx = i; bestDist = dist; }
                           }
                           setGlobalIdx(bestIdx);
+                        }}
+                        onSlotScaleChange={(si, mult, off) => {
+                          // Map panel slot index back to group slot index
+                          const sIdx = panelIndices[si];
+                          if (sIdx === undefined) return;
+                          const updated = [...slots];
+                          updated[sIdx] = { ...updated[sIdx], scalarMultiplier: mult, scalarOffset: off };
+                          onUpdate({ ...group, slots: updated });
                         }}
                       />
                     </div>

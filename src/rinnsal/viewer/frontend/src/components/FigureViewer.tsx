@@ -89,8 +89,8 @@ function FigureRunCard({ run, runPath, tag, figures, color, compareGroups, onAdd
         </div>
       </div>
       {figures.length > 1 && (
-        <div className="mb-3">
-          <input type="range" min={0} max={figures.length - 1} value={selectedIdx} onChange={(e) => setSelectedIdx(parseInt(e.target.value))} className="w-full" />
+        <div className="mb-3" onMouseDown={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+          <input type="range" min={0} max={figures.length - 1} value={selectedIdx} onChange={(e) => setSelectedIdx(parseInt(e.target.value))} className="w-full" draggable={false} />
         </div>
       )}
       <img src={imgUrl} alt={`${runName} - ${tag} @ ${currentFigure.it}`} className="max-w-full rounded" loading="lazy" />
