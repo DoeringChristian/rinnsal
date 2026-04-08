@@ -319,6 +319,8 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
 
             # Package tracked files (like Metaflow's code packaging):
             # git ls-files --recurse-submodules → tar → ssh → extract
+            import sys
+            print(f"[rinnsal] Syncing code to {host.hostname}...", file=sys.stderr, flush=True)
             try:
                 result = _sp.run(
                     ["git", "ls-files", "--recurse-submodules", "-z"],
@@ -360,14 +362,23 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
                     )
 
         script = self._provisioner.provision_script(self._work_dir)
+        import sys
+        print(f"[rinnsal] Provisioning {host.hostname}...", file=sys.stderr, flush=True)
         result = await conn.run(
             f"bash <<'__RINNSAL_PROVISION__'\n{script}\n__RINNSAL_PROVISION__",
             check=False,
         )
+        # Always print provision output so users can see build progress/errors
+        if result.stdout and result.stdout.strip():
+            print(f"[rinnsal] {host.hostname} provision stdout:\n{result.stdout}", file=sys.stderr, flush=True)
+        if result.stderr and result.stderr.strip():
+            print(f"[rinnsal] {host.hostname} provision stderr:\n{result.stderr}", file=sys.stderr, flush=True)
         if result.exit_status != 0:
             raise RuntimeError(
-                f"Provisioning failed on {host.hostname}:\n{result.stderr}"
+                f"Provisioning failed on {host.hostname} (exit {result.exit_status}):\n"
+                f"stdout: {result.stdout}\nstderr: {result.stderr}"
             )
+        print(f"[rinnsal] {host.hostname} provisioned successfully.", file=sys.stderr, flush=True)
 
     def shutdown(self, wait: bool = True) -> None:
         """No persistent pool to shut down."""
