@@ -95,7 +95,7 @@ class PixiProvisioner:
         return "\n".join(lines)
 
     def python_command(self, work_dir: str) -> str:
-        return f"cd {work_dir} && pixi run python"
+        return f'export PATH="$HOME/.pixi/bin:$PATH" && cd {work_dir} && pixi run python'
 
 
 def _detect_provisioner(search_dir: str | Path | None = None) -> Provisioner:
