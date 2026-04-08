@@ -89,8 +89,33 @@ class PixiProvisioner:
     def project_dir(self) -> Path:
         return self._project_dir
 
+    def _find_path_deps(self) -> list[tuple[str, bool]]:
+        """Find path-based pypi dependencies in pixi.toml. Returns [(path, editable)]."""
+        pixi_toml = self._project_dir / "pixi.toml"
+        if not pixi_toml.exists():
+            return []
+        try:
+            import tomllib
+        except ImportError:
+            try:
+                import tomli as tomllib  # type: ignore
+            except ImportError:
+                return []
+        try:
+            with open(pixi_toml, "rb") as f:
+                data = tomllib.load(f)
+        except Exception:
+            return []
+
+        deps = []
+        for section in ["pypi-dependencies"]:
+            for _name, spec in data.get(section, {}).items():
+                if isinstance(spec, dict) and "path" in spec:
+                    deps.append((spec["path"], spec.get("editable", False)))
+        return deps
+
     def provision_script(self, work_dir: str) -> str:
-        return "\n".join([
+        lines = [
             "set -e",
             f"mkdir -p {work_dir}",
             'export PATH="$HOME/.pixi/bin:$PATH"',
@@ -98,9 +123,14 @@ class PixiProvisioner:
             'export PATH="$HOME/.pixi/bin:$PATH"',
             f"cd {work_dir}",
             "pixi install --quiet",
-            # Ensure cloudpickle is available
-            "pixi run pip install --quiet cloudpickle 2>/dev/null || true",
-        ])
+        ]
+        # Explicitly install path-based deps (pixi install may not handle them on a fresh clone)
+        for path, editable in self._find_path_deps():
+            flag = "-e " if editable else ""
+            lines.append(f"pixi run pip install --quiet {flag}{work_dir}/{path}")
+        # Ensure cloudpickle is available
+        lines.append("pixi run pip install --quiet cloudpickle 2>/dev/null || true")
+        return "\n".join(lines)
 
     def python_command(self, work_dir: str) -> str:
         return f'export PATH="$HOME/.pixi/bin:$PATH" && cd {work_dir} && pixi run python'
