@@ -180,6 +180,11 @@ class AutoProvisioner:
     def inner(self) -> Provisioner:
         return self._inner
 
+    @property
+    def project_dir(self) -> Path | None:
+        """Delegate to inner provisioner's project_dir if it has one."""
+        return getattr(self._inner, "project_dir", None)
+
     def provision_script(self, work_dir: str) -> str:
         return self._inner.provision_script(work_dir)
 
