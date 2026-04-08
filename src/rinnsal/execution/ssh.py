@@ -316,13 +316,15 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
 
             # rsync the project, excluding heavy/transient dirs
             proc = await asyncio.create_subprocess_exec(
-                "rsync", "-az", "--delete",
+                "rsync", "-azL", "--delete",
                 "--exclude", ".pixi/",
                 "--exclude", ".git/",
                 "--exclude", "__pycache__/",
                 "--exclude", "*.pyc",
                 "--exclude", ".rinnsal/",
                 "--exclude", "runs/",
+                "--exclude", ".venv/",
+                "--exclude", "node_modules/",
                 "-e", f"ssh -p {port} -o StrictHostKeyChecking=no",
                 f"{project_dir}/",
                 f"{user_host}:{self._work_dir}/",
