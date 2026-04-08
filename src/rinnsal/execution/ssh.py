@@ -302,6 +302,20 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
 
     async def _provision_host(self, conn: Any, host: SSHHost) -> None:
         """Run provisioning script on a remote host."""
+        import asyncssh
+
+        # Ensure work dir exists
+        await conn.run(f"mkdir -p {self._work_dir}", check=True)
+
+        # Sync provisioner files (e.g. pixi.toml, pixi.lock) if available
+        if hasattr(self._provisioner, "get_sync_files"):
+            sync_files = self._provisioner.get_sync_files()
+            if sync_files:
+                async with conn.start_sftp_client() as sftp:
+                    for local_path, remote_rel in sync_files:
+                        remote_path = f"{self._work_dir}/{remote_rel}"
+                        await sftp.put(str(local_path), remote_path)
+
         script = self._provisioner.provision_script(self._work_dir)
         result = await conn.run(
             f"bash <<'__RINNSAL_PROVISION__'\n{script}\n__RINNSAL_PROVISION__",
