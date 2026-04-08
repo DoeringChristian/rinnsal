@@ -307,35 +307,62 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
         # Ensure work dir exists
         await conn.run(f"mkdir -p {self._work_dir}", check=True)
 
-        # Sync project directory to remote if provisioner has one
+        # Sync project source files to remote (git-tracked files only)
         project_dir = getattr(self._provisioner, "project_dir", None)
         if project_dir and Path(project_dir).is_dir():
             import asyncio
+            import subprocess as _sp
             port = host.port or 22
             user_host = f"{host.username}@{host.hostname}" if host.username else host.hostname
 
-            # rsync the project, excluding heavy/transient dirs
-            proc = await asyncio.create_subprocess_exec(
-                "rsync", "-azL", "--delete",
-                "--exclude", ".pixi/",
-                "--exclude", ".git/",
-                "--exclude", "__pycache__/",
-                "--exclude", "*.pyc",
-                "--exclude", ".rinnsal/",
-                "--exclude", "runs/",
-                "--exclude", ".venv/",
-                "--exclude", "node_modules/",
-                "-e", f"ssh -p {port} -o StrictHostKeyChecking=no",
-                f"{project_dir}/",
-                f"{user_host}:{self._work_dir}/",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            _, stderr = await proc.communicate()
-            if proc.returncode != 0:
-                raise RuntimeError(
-                    f"rsync to {host.hostname} failed: {stderr.decode()}"
+            # Use git ls-files to get only tracked files (respects .gitignore)
+            try:
+                result = _sp.run(
+                    ["git", "ls-files", "-z"],
+                    capture_output=True, cwd=str(project_dir),
                 )
+                if result.returncode == 0 and result.stdout:
+                    # rsync from file list — only tracked files
+                    proc = await asyncio.create_subprocess_exec(
+                        "rsync", "-azL", "--delete",
+                        "--files-from=-",
+                        "-e", f"ssh -p {port} -o StrictHostKeyChecking=no",
+                        f"{project_dir}/",
+                        f"{user_host}:{self._work_dir}/",
+                        stdin=asyncio.subprocess.PIPE,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                    )
+                    # Convert null-separated to newline-separated for rsync --files-from
+                    file_list = result.stdout.replace(b"\0", b"\n")
+                    _, stderr = await proc.communicate(input=file_list)
+                    if proc.returncode != 0:
+                        raise RuntimeError(
+                            f"rsync to {host.hostname} failed: {stderr.decode()}"
+                        )
+                else:
+                    raise RuntimeError("git ls-files failed")
+            except (FileNotFoundError, RuntimeError):
+                # Fallback: rsync with excludes (non-git project)
+                proc = await asyncio.create_subprocess_exec(
+                    "rsync", "-azL", "--delete",
+                    "--exclude", ".pixi/", "--exclude", ".git/",
+                    "--exclude", "__pycache__/", "--exclude", "*.pyc",
+                    "--exclude", ".rinnsal/", "--exclude", "runs/",
+                    "--exclude", ".venv/", "--exclude", "node_modules/",
+                    "--exclude", ".cache/", "--exclude", "out/",
+                    "--exclude", "data/", "--exclude", "*.so",
+                    "-e", f"ssh -p {port} -o StrictHostKeyChecking=no",
+                    f"{project_dir}/",
+                    f"{user_host}:{self._work_dir}/",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, stderr = await proc.communicate()
+                if proc.returncode != 0:
+                    raise RuntimeError(
+                        f"rsync to {host.hostname} failed: {stderr.decode()}"
+                    )
 
         script = self._provisioner.provision_script(self._work_dir)
         result = await conn.run(
