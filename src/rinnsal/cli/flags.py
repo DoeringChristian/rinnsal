@@ -20,8 +20,11 @@ def add_builtin_flags(parser: argparse.ArgumentParser) -> None:
         "--executor",
         type=str,
         default="subprocess",
-        help="Executor to use for task execution",
-        choices=["inline", "subprocess", "ssh", "ray", "slurm"],
+        help=(
+            "Executor to use: inline, subprocess, ray, slurm, "
+            "or ssh:[user@]host[:port][,[user@]host[:port]...] "
+            "e.g. --executor ssh:rgllab or --executor ssh:user@host1,host2"
+        ),
     )
 
     builtin_group.add_argument(
