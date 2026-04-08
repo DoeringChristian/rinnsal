@@ -64,6 +64,7 @@ interface ImageRunCardProps {
 
 function ImageRunCard({ run, runPath, tag, images, color, compareGroups, onAddToCompare }: ImageRunCardProps) {
   const [selectedIdx, setSelectedIdx] = useState(images.length - 1);
+  const [sliderActive, setSliderActive] = useState(false);
   const runName = run.split("/").pop() || run;
   const current = images[selectedIdx];
   const imgSrc = imageUrl(runPath, tag, current.it);
@@ -80,7 +81,11 @@ function ImageRunCard({ run, runPath, tag, images, color, compareGroups, onAddTo
   };
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-4 cursor-grab active:cursor-grabbing" draggable onDragStart={handleDragStart}>
+    <div
+      className={`bg-white rounded-lg border border-gray-200 p-4 ${sliderActive ? "" : "cursor-grab active:cursor-grabbing"}`}
+      draggable={!sliderActive}
+      onDragStart={handleDragStart}
+    >
       <div className="flex items-center justify-between mb-3">
         <span className="font-medium" style={{ color }}>{runName}</span>
         <div className="flex items-center gap-2">
@@ -89,7 +94,7 @@ function ImageRunCard({ run, runPath, tag, images, color, compareGroups, onAddTo
         </div>
       </div>
       {images.length > 1 && (
-        <div className="mb-3" onMouseDown={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+        <div className="mb-3" onMouseEnter={() => setSliderActive(true)} onMouseLeave={() => setSliderActive(false)}>
           <input type="range" min={0} max={images.length - 1} value={selectedIdx} onChange={(e) => setSelectedIdx(parseInt(e.target.value))} className="w-full" draggable={false} />
         </div>
       )}

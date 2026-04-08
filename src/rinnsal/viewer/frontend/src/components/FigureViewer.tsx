@@ -64,6 +64,7 @@ interface FigureRunCardProps {
 
 function FigureRunCard({ run, runPath, tag, figures, color, compareGroups, onAddToCompare }: FigureRunCardProps) {
   const [selectedIdx, setSelectedIdx] = useState(figures.length - 1);
+  const [sliderActive, setSliderActive] = useState(false);
   const runName = run.split("/").pop() || run;
   const currentFigure = figures[selectedIdx];
   const imgUrl = figureImageUrl(runPath, tag, currentFigure.it);
@@ -80,7 +81,11 @@ function FigureRunCard({ run, runPath, tag, figures, color, compareGroups, onAdd
   };
 
   return (
-    <div className="bg-white rounded-lg border border-gray-200 p-4 cursor-grab active:cursor-grabbing" draggable onDragStart={handleDragStart}>
+    <div
+      className={`bg-white rounded-lg border border-gray-200 p-4 ${sliderActive ? "" : "cursor-grab active:cursor-grabbing"}`}
+      draggable={!sliderActive}
+      onDragStart={handleDragStart}
+    >
       <div className="flex items-center justify-between mb-3">
         <span className="font-medium" style={{ color }}>{runName}</span>
         <div className="flex items-center gap-2">
@@ -89,7 +94,7 @@ function FigureRunCard({ run, runPath, tag, figures, color, compareGroups, onAdd
         </div>
       </div>
       {figures.length > 1 && (
-        <div className="mb-3" onMouseDown={(e) => e.stopPropagation()} onPointerDown={(e) => e.stopPropagation()}>
+        <div className="mb-3" onMouseEnter={() => setSliderActive(true)} onMouseLeave={() => setSliderActive(false)}>
           <input type="range" min={0} max={figures.length - 1} value={selectedIdx} onChange={(e) => setSelectedIdx(parseInt(e.target.value))} className="w-full" draggable={false} />
         </div>
       )}
