@@ -317,51 +317,46 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
 
             ssh_cmd = f"ssh -p {port} -o StrictHostKeyChecking=no"
 
-            # Use git ls-files --recurse-submodules to get tracked files
-            # (respects .gitignore, includes submodule files like ext/rinnsal)
+            # Package tracked files (like Metaflow's code packaging):
+            # git ls-files --recurse-submodules → tar → ssh → extract
             try:
                 result = _sp.run(
                     ["git", "ls-files", "--recurse-submodules", "-z"],
                     capture_output=True, cwd=str(project_dir),
                 )
-                if result.returncode == 0 and result.stdout:
-                    file_list = result.stdout.replace(b"\0", b"\n")
-                    proc = await asyncio.create_subprocess_exec(
-                        "rsync", "-azL", "--files-from=-",
-                        "-e", ssh_cmd,
-                        f"{project_dir}/",
-                        f"{user_host}:{self._work_dir}/",
-                        stdin=asyncio.subprocess.PIPE,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                    )
-                    _, stderr = await proc.communicate(input=file_list)
-                    if proc.returncode != 0:
-                        raise RuntimeError(
-                            f"rsync to {host.hostname} failed: {stderr.decode()}"
-                        )
-                else:
+                if result.returncode != 0 or not result.stdout:
                     raise RuntimeError("git ls-files failed")
+
+                # Create tar from the file list and pipe it to the remote
+                files = result.stdout.replace(b"\0", b"\n").strip()
+                proc = await asyncio.create_subprocess_shell(
+                    f"tar -cf - -C {project_dir} --files-from=- | "
+                    f"{ssh_cmd} {user_host} 'mkdir -p {self._work_dir} && tar -xf - -C {self._work_dir}'",
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, stderr = await proc.communicate(input=files)
+                if proc.returncode != 0:
+                    raise RuntimeError(
+                        f"Code transfer to {host.hostname} failed: {stderr.decode()}"
+                    )
             except (FileNotFoundError, RuntimeError):
-                # Fallback for non-git projects
-                proc = await asyncio.create_subprocess_exec(
-                    "rsync", "-azL", "--delete",
-                    "--exclude", ".pixi/", "--exclude", ".git/",
-                    "--exclude", "__pycache__/", "--exclude", "*.pyc",
-                    "--exclude", ".rinnsal/", "--exclude", "runs/",
-                    "--exclude", ".venv/", "--exclude", "node_modules/",
-                    "--exclude", ".cache/", "--exclude", "out/",
-                    "--exclude", "data/", "--exclude", "*.so",
-                    "-e", ssh_cmd,
-                    f"{project_dir}/",
-                    f"{user_host}:{self._work_dir}/",
+                # Fallback for non-git projects: tar with excludes
+                proc = await asyncio.create_subprocess_shell(
+                    f"tar -cf - -C {project_dir} "
+                    f"--exclude='.pixi' --exclude='.git' --exclude='__pycache__' "
+                    f"--exclude='.rinnsal' --exclude='runs' --exclude='.venv' "
+                    f"--exclude='node_modules' --exclude='.cache' --exclude='out' "
+                    f"--exclude='data' --exclude='*.pyc' --exclude='*.so' "
+                    f". | {ssh_cmd} {user_host} 'mkdir -p {self._work_dir} && tar -xf - -C {self._work_dir}'",
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
                 _, stderr = await proc.communicate()
                 if proc.returncode != 0:
                     raise RuntimeError(
-                        f"rsync to {host.hostname} failed: {stderr.decode()}"
+                        f"Code transfer to {host.hostname} failed: {stderr.decode()}"
                     )
 
         script = self._provisioner.provision_script(self._work_dir)
