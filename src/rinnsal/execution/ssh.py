@@ -307,14 +307,33 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
         # Ensure work dir exists
         await conn.run(f"mkdir -p {self._work_dir}", check=True)
 
-        # Sync provisioner files (e.g. pixi.toml, pixi.lock) if available
-        if hasattr(self._provisioner, "get_sync_files"):
-            sync_files = self._provisioner.get_sync_files()
-            if sync_files:
-                async with conn.start_sftp_client() as sftp:
-                    for local_path, remote_rel in sync_files:
-                        remote_path = f"{self._work_dir}/{remote_rel}"
-                        await sftp.put(str(local_path), remote_path)
+        # Sync project directory to remote if provisioner has one
+        project_dir = getattr(self._provisioner, "project_dir", None)
+        if project_dir and Path(project_dir).is_dir():
+            import asyncio
+            port = host.port or 22
+            user_host = f"{host.username}@{host.hostname}" if host.username else host.hostname
+
+            # rsync the project, excluding heavy/transient dirs
+            proc = await asyncio.create_subprocess_exec(
+                "rsync", "-az", "--delete",
+                "--exclude", ".pixi/",
+                "--exclude", ".git/",
+                "--exclude", "__pycache__/",
+                "--exclude", "*.pyc",
+                "--exclude", ".rinnsal/",
+                "--exclude", "runs/",
+                "-e", f"ssh -p {port} -o StrictHostKeyChecking=no",
+                f"{project_dir}/",
+                f"{user_host}:{self._work_dir}/",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+            if proc.returncode != 0:
+                raise RuntimeError(
+                    f"rsync to {host.hostname} failed: {stderr.decode()}"
+                )
 
         script = self._provisioner.provision_script(self._work_dir)
         result = await conn.run(

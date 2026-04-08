@@ -73,59 +73,34 @@ class PipProvisioner:
 
 
 class PixiProvisioner:
-    """Provision using pixi — syncs local pixi project to remote.
+    """Provision using pixi — syncs entire project to remote, runs pixi install.
 
-    Copies the local pixi.toml and pixi.lock to the remote work_dir,
-    installs pixi if needed, and runs pixi install to mirror the
-    local environment. Also ensures cloudpickle is available.
+    The local project directory (containing pixi.toml) is rsynced to the
+    remote work_dir. Then pixi is bootstrapped and pixi install is run,
+    which resolves all dependencies including local path-based ones.
     """
 
-    def __init__(
-        self,
-        extra_packages: list[str] | None = None,
-        project_dir: str | Path | None = None,
-    ) -> None:
-        self._extra_packages = extra_packages or []
-        # Find the pixi project root
+    def __init__(self, project_dir: str | Path | None = None) -> None:
         if project_dir is None:
             project_dir = Path.cwd()
-        self._project_dir = Path(project_dir)
-        self._pixi_toml = self._project_dir / "pixi.toml"
-        self._pixi_lock = self._project_dir / "pixi.lock"
+        self._project_dir = Path(project_dir).resolve()
 
-    def get_sync_files(self) -> list[tuple[Path, str]]:
-        """Return list of (local_path, remote_relative_path) to sync."""
-        files = []
-        if self._pixi_toml.exists():
-            files.append((self._pixi_toml, "pixi.toml"))
-        if self._pixi_lock.exists():
-            files.append((self._pixi_lock, "pixi.lock"))
-        return files
+    @property
+    def project_dir(self) -> Path:
+        return self._project_dir
 
     def provision_script(self, work_dir: str) -> str:
-        lines = [
+        return "\n".join([
             "set -e",
             f"mkdir -p {work_dir}",
             'export PATH="$HOME/.pixi/bin:$PATH"',
             "command -v pixi >/dev/null 2>&1 || curl -fsSL https://pixi.sh/install.sh | sh",
             'export PATH="$HOME/.pixi/bin:$PATH"',
             f"cd {work_dir}",
-        ]
-        if self._pixi_toml.exists():
-            # Project files are synced separately by the SSH executor
-            # Just run pixi install to set up the environment
-            lines.append("pixi install --quiet")
-        else:
-            # No local pixi project — create a minimal one
-            lines.append("pixi init --quiet 2>/dev/null || true")
-            packages = ["cloudpickle", *self._extra_packages]
-            for pkg in packages:
-                lines.append(f"pixi add --quiet {pkg}")
-            lines.append("pixi install --quiet")
-
-        # Ensure cloudpickle is available even if not in the project deps
-        lines.append("pixi add --quiet cloudpickle 2>/dev/null || true")
-        return "\n".join(lines)
+            "pixi install --quiet",
+            # Ensure cloudpickle is available
+            "pixi run pip install --quiet cloudpickle 2>/dev/null || true",
+        ])
 
     def python_command(self, work_dir: str) -> str:
         return f'export PATH="$HOME/.pixi/bin:$PATH" && cd {work_dir} && pixi run python'
