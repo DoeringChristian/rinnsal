@@ -315,6 +315,8 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
             port = host.port or 22
             user_host = f"{host.username}@{host.hostname}" if host.username else host.hostname
 
+            ssh_cmd = f"ssh -p {port} -o StrictHostKeyChecking=no"
+
             # Use git ls-files to get only tracked files (respects .gitignore)
             try:
                 result = _sp.run(
@@ -322,28 +324,65 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
                     capture_output=True, cwd=str(project_dir),
                 )
                 if result.returncode == 0 and result.stdout:
-                    # rsync from file list — only tracked files
+                    file_list = result.stdout.replace(b"\0", b"\n")
                     proc = await asyncio.create_subprocess_exec(
-                        "rsync", "-azL", "--delete",
-                        "--files-from=-",
-                        "-e", f"ssh -p {port} -o StrictHostKeyChecking=no",
+                        "rsync", "-azL", "--files-from=-",
+                        "-e", ssh_cmd,
                         f"{project_dir}/",
                         f"{user_host}:{self._work_dir}/",
                         stdin=asyncio.subprocess.PIPE,
                         stdout=asyncio.subprocess.PIPE,
                         stderr=asyncio.subprocess.PIPE,
                     )
-                    # Convert null-separated to newline-separated for rsync --files-from
-                    file_list = result.stdout.replace(b"\0", b"\n")
                     _, stderr = await proc.communicate(input=file_list)
                     if proc.returncode != 0:
                         raise RuntimeError(
                             f"rsync to {host.hostname} failed: {stderr.decode()}"
                         )
+
+                    # Also sync symlinked directories (e.g. ext/rinnsal -> /other/path)
+                    # git ls-files won't include files from external symlink targets
+                    for item in Path(project_dir).iterdir():
+                        if item.is_symlink() and item.resolve().is_dir():
+                            target = str(item.resolve())
+                            remote_path = f"{self._work_dir}/{item.name}"
+                            proc = await asyncio.create_subprocess_exec(
+                                "rsync", "-az", "--delete",
+                                "--exclude", ".git/", "--exclude", "__pycache__/",
+                                "--exclude", "*.pyc", "--exclude", ".venv/",
+                                "--exclude", "node_modules/",
+                                "-e", ssh_cmd,
+                                f"{target}/",
+                                f"{user_host}:{remote_path}/",
+                                stdout=asyncio.subprocess.PIPE,
+                                stderr=asyncio.subprocess.PIPE,
+                            )
+                            await proc.communicate()
+                    # Check nested symlinks too (e.g. ext/rinnsal)
+                    ext_dir = Path(project_dir) / "ext"
+                    if ext_dir.is_dir():
+                        for item in ext_dir.iterdir():
+                            if item.is_symlink() and item.resolve().is_dir():
+                                target = str(item.resolve())
+                                remote_path = f"{self._work_dir}/ext/{item.name}"
+                                proc = await asyncio.create_subprocess_exec(
+                                    "rsync", "-az", "--delete",
+                                    "--exclude", ".git/", "--exclude", "__pycache__/",
+                                    "--exclude", "*.pyc", "--exclude", ".venv/",
+                                    "--exclude", "node_modules/", "--exclude", "runs/",
+                                    "-e", ssh_cmd,
+                                    f"{target}/",
+                                    f"{user_host}:{remote_path}/",
+                                    stdout=asyncio.subprocess.PIPE,
+                                    stderr=asyncio.subprocess.PIPE,
+                                )
+                                await proc.communicate()
                 else:
                     raise RuntimeError("git ls-files failed")
-            except (FileNotFoundError, RuntimeError):
-                # Fallback: rsync with excludes (non-git project)
+            except (FileNotFoundError, RuntimeError) as exc:
+                if "git ls-files failed" not in str(exc) and "rsync" not in str(exc):
+                    raise
+                # Fallback for non-git projects
                 proc = await asyncio.create_subprocess_exec(
                     "rsync", "-azL", "--delete",
                     "--exclude", ".pixi/", "--exclude", ".git/",
@@ -352,7 +391,7 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
                     "--exclude", ".venv/", "--exclude", "node_modules/",
                     "--exclude", ".cache/", "--exclude", "out/",
                     "--exclude", "data/", "--exclude", "*.so",
-                    "-e", f"ssh -p {port} -o StrictHostKeyChecking=no",
+                    "-e", ssh_cmd,
                     f"{project_dir}/",
                     f"{user_host}:{self._work_dir}/",
                     stdout=asyncio.subprocess.PIPE,
