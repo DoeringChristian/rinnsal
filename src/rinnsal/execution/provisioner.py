@@ -127,12 +127,15 @@ class PixiProvisioner:
         # Explicitly install path-based deps (pixi install may not handle them on a fresh clone)
         path_deps = self._find_path_deps()
         if path_deps:
-            # Ensure build backends are available
             lines.append("pixi run pip install --quiet uv-build hatchling setuptools 2>/dev/null || true")
             for path, _editable in path_deps:
                 lines.append(f"pixi run pip install --quiet {work_dir}/{path}")
         # Ensure cloudpickle is available
         lines.append("pixi run pip install --quiet cloudpickle 2>/dev/null || true")
+        # Run custom provision script if present (for builds like cmake/mitsuba)
+        provision_sh = self._project_dir / ".rinnsal-provision.sh"
+        if provision_sh.exists():
+            lines.append(f"bash {work_dir}/.rinnsal-provision.sh")
         return "\n".join(lines)
 
     def python_command(self, work_dir: str) -> str:
