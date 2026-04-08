@@ -5,7 +5,7 @@ from __future__ import annotations
 import base64
 import threading
 import tempfile
-from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import Future
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -79,8 +79,8 @@ class SSHExecutor(Executor):
         super().__init__(capture=capture, snapshot=snapshot)
         self._hosts = hosts
         self._max_connections = max_connections_per_host
-        self._thread_pool = ThreadPoolExecutor(
-            max_workers=len(hosts) * max_connections_per_host
+        self._semaphore = threading.Semaphore(
+            len(hosts) * max_connections_per_host
         )
         self._host_index = 0
         self._provisioner = provisioner if provisioner is not None else AutoProvisioner()
@@ -119,10 +119,23 @@ class SSHExecutor(Executor):
         serialized_payload = cloudpickle.dumps(payload)
         encoded_payload = base64.b64encode(serialized_payload).decode("ascii")
 
-        # Submit to thread pool for async execution
-        return self._thread_pool.submit(
-            self._execute_on_host, host, encoded_payload
-        )
+        result_future: Future[ExecutionResult] = Future()
+
+        def _run() -> None:
+            self._semaphore.acquire()
+            try:
+                result = self._execute_on_host(host, encoded_payload)
+                result_future.set_result(result)
+            except Exception as e:
+                result_future.set_result(
+                    ExecutionResult(value=None, success=False, error=e)
+                )
+            finally:
+                self._semaphore.release()
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        return result_future
 
     def _execute_on_host(
         self, host: SSHHost, encoded_payload: str
@@ -300,8 +313,7 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
             )
 
     def shutdown(self, wait: bool = True) -> None:
-        """Shutdown the executor."""
-        self._thread_pool.shutdown(wait=wait)
+        """No persistent pool to shut down."""
 
     def __repr__(self) -> str:
         hosts_str = ", ".join(str(h) for h in self._hosts)

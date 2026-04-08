@@ -6,8 +6,9 @@ import logging
 import multiprocessing as mp
 import os
 import sys
-from concurrent.futures import BrokenExecutor, Future, ProcessPoolExecutor
-from typing import TYPE_CHECKING, Any, Callable
+import threading
+from concurrent.futures import Future, ProcessPoolExecutor
+from typing import TYPE_CHECKING, Any
 
 _log = logging.getLogger(__name__)
 
@@ -99,8 +100,9 @@ def _worker_execute(
 class SubprocessExecutor(Executor):
     """Executor that runs tasks in separate processes.
 
-    Provides isolation - crashes don't take down the orchestrator.
-    Uses ProcessPoolExecutor for parallel execution.
+    Provides isolation - each task gets a fresh subprocess, so crashes
+    don't take down the orchestrator or poison a shared pool.
+    Concurrency is limited by max_workers via a semaphore.
     """
 
     def __init__(
@@ -111,38 +113,20 @@ class SubprocessExecutor(Executor):
     ) -> None:
         super().__init__(capture=capture, snapshot=snapshot)
         self._max_workers = max_workers or os.cpu_count() or 4
-        self._pool: ProcessPoolExecutor | None = None
         self._mp_context = mp.get_context("spawn")
+        self._semaphore = threading.Semaphore(self._max_workers)
 
     @property
     def max_workers(self) -> int:
         return self._max_workers
 
-    def _get_pool(self) -> ProcessPoolExecutor:
-        """Get or create the process pool."""
-        if self._pool is None or self._pool._broken:
-            if self._pool is not None:
-                _log.warning("Replacing broken process pool")
-                try:
-                    self._pool.shutdown(wait=False, cancel_futures=True)
-                except Exception:
-                    pass
-            self._pool = ProcessPoolExecutor(
-                max_workers=self._max_workers,
-                mp_context=self._mp_context,
-            )
-        return self._pool
-
-    def submit(
+    def _prepare_submission(
         self,
         expr: TaskExpression,
         resolved_args: tuple[Any, ...],
         resolved_kwargs: dict[str, Any],
-    ) -> Future[ExecutionResult]:
-        """Submit a task for subprocess execution."""
-        pool = self._get_pool()
-
-        # Create snapshot if enabled
+    ) -> tuple:
+        """Prepare serialized arguments for submission."""
         remapped_pythonpath: str | None = None
         if self._snapshot:
             from rinnsal.core.snapshot import (
@@ -155,13 +139,11 @@ class SubprocessExecutor(Executor):
             if snapshot_path and snapshot_path.exists():
                 remapped_pythonpath = build_pythonpath(snapshot_path)
 
-        # Serialize function and arguments
         serialized_func = cloudpickle.dumps(expr.func)
         serialized_args = cloudpickle.dumps(resolved_args)
         serialized_kwargs = cloudpickle.dumps(resolved_kwargs)
 
-        # Submit to pool (retry once if pool is broken)
-        submit_args = (
+        return (
             _worker_execute,
             serialized_func,
             serialized_args,
@@ -170,62 +152,71 @@ class SubprocessExecutor(Executor):
             remapped_pythonpath,
             self._checkpoint_path,
         )
+
+    @staticmethod
+    def _handle_worker_result(
+        f: Future, result_future: Future[ExecutionResult]
+    ) -> None:
+        """Handle the result from a worker future."""
         try:
-            future = pool.submit(*submit_args)
-        except BrokenExecutor:
-            _log.warning(
-                "Process pool broken (worker crash / OOM?), creating new pool"
+            success, result_bytes, stdout, stderr, error_bytes, card = (
+                f.result()
             )
-            pool = self._get_pool()  # _get_pool detects _broken, recreates
-            future = pool.submit(*submit_args)
 
-        # Wrap the future to return ExecutionResult
-        result_future: Future[ExecutionResult] = Future()
-
-        def callback(f: Future) -> None:
-            try:
-                success, result_bytes, stdout, stderr, error_bytes, card = (
-                    f.result()
+            if success:
+                result = cloudpickle.loads(result_bytes)
+                result_future.set_result(
+                    ExecutionResult(
+                        value=result,
+                        stdout=stdout,
+                        stderr=stderr,
+                        success=True,
+                        card=card,
+                    )
                 )
-
-                if success:
-                    result = cloudpickle.loads(result_bytes)
-                    result_future.set_result(
-                        ExecutionResult(
-                            value=result,
-                            stdout=stdout,
-                            stderr=stderr,
-                            success=True,
-                            card=card,
-                        )
-                    )
-                else:
-                    error = (
-                        cloudpickle.loads(error_bytes) if error_bytes else None
-                    )
-                    result_future.set_result(
-                        ExecutionResult(
-                            value=None,
-                            stdout=stdout,
-                            stderr=stderr,
-                            success=False,
-                            error=error,
-                        )
-                    )
-            except BrokenExecutor as e:
-                _log.warning(
-                    "Worker process terminated abruptly (OOM / signal): %s", e
+            else:
+                error = (
+                    cloudpickle.loads(error_bytes) if error_bytes else None
                 )
                 result_future.set_result(
                     ExecutionResult(
                         value=None,
+                        stdout=stdout,
+                        stderr=stderr,
                         success=False,
-                        error=RuntimeError(
-                            f"Worker process terminated abruptly "
-                            f"(possible OOM): {e}"
-                        ),
+                        error=error,
                     )
                 )
+        except Exception as e:
+            result_future.set_result(
+                ExecutionResult(
+                    value=None,
+                    success=False,
+                    error=e,
+                )
+            )
+
+    def submit(
+        self,
+        expr: TaskExpression,
+        resolved_args: tuple[Any, ...],
+        resolved_kwargs: dict[str, Any],
+    ) -> Future[ExecutionResult]:
+        """Submit a task for subprocess execution."""
+        submit_args = self._prepare_submission(
+            expr, resolved_args, resolved_kwargs
+        )
+        result_future: Future[ExecutionResult] = Future()
+
+        def _run() -> None:
+            self._semaphore.acquire()
+            proc = ProcessPoolExecutor(
+                max_workers=1,
+                mp_context=self._mp_context,
+            )
+            try:
+                future = proc.submit(*submit_args)
+                self._handle_worker_result(future, result_future)
             except Exception as e:
                 result_future.set_result(
                     ExecutionResult(
@@ -234,34 +225,16 @@ class SubprocessExecutor(Executor):
                         error=e,
                     )
                 )
+            finally:
+                proc.shutdown(wait=True)
+                self._semaphore.release()
 
-        future.add_done_callback(callback)
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
         return result_future
 
     def shutdown(self, wait: bool = True) -> None:
-        """Shutdown the process pool.
-
-        Args:
-            wait: If True, wait for workers to finish gracefully.
-                  If False, kill worker processes immediately.
-        """
-        if self._pool is not None:
-            if wait:
-                self._pool.shutdown(wait=True)
-            else:
-                self._pool.shutdown(wait=False, cancel_futures=True)
-                self._kill_workers()
-            self._pool = None
-
-    def _kill_workers(self) -> None:
-        """Terminate all worker processes in the pool."""
-        # ProcessPoolExecutor stores worker processes in _processes
-        processes = getattr(self._pool, "_processes", None)
-        if processes:
-            for pid, proc in list(processes.items()):
-                if proc.is_alive():
-                    proc.kill()
-                proc.join(timeout=5)
+        """No persistent pool to shut down."""
 
     def __repr__(self) -> str:
         return f"SubprocessExecutor(max_workers={self._max_workers}, capture={self._capture})"
@@ -272,6 +245,7 @@ class ForkExecutor(Executor):
 
     More efficient than SubprocessExecutor because it shares memory
     at the point of fork. Only available on Unix systems.
+    Each task gets a fresh process; concurrency is limited by max_workers.
     """
 
     def __init__(
@@ -285,38 +259,20 @@ class ForkExecutor(Executor):
 
         super().__init__(capture=capture, snapshot=snapshot)
         self._max_workers = max_workers or os.cpu_count() or 4
-        self._pool: ProcessPoolExecutor | None = None
+        self._mp_context = mp.get_context("fork")
+        self._semaphore = threading.Semaphore(self._max_workers)
 
     @property
     def max_workers(self) -> int:
         return self._max_workers
 
-    def _get_pool(self) -> ProcessPoolExecutor:
-        """Get or create the fork-based process pool."""
-        if self._pool is None or self._pool._broken:
-            if self._pool is not None:
-                _log.warning("Replacing broken process pool")
-                try:
-                    self._pool.shutdown(wait=False, cancel_futures=True)
-                except Exception:
-                    pass
-            self._mp_context = mp.get_context("fork")
-            self._pool = ProcessPoolExecutor(
-                max_workers=self._max_workers,
-                mp_context=self._mp_context,
-            )
-        return self._pool
-
-    def submit(
+    def _prepare_submission(
         self,
         expr: TaskExpression,
         resolved_args: tuple[Any, ...],
         resolved_kwargs: dict[str, Any],
-    ) -> Future[ExecutionResult]:
-        """Submit a task for fork-based execution."""
-        pool = self._get_pool()
-
-        # Create snapshot if enabled
+    ) -> tuple:
+        """Prepare serialized arguments for submission."""
         remapped_pythonpath: str | None = None
         if self._snapshot:
             from rinnsal.core.snapshot import (
@@ -329,13 +285,11 @@ class ForkExecutor(Executor):
             if snapshot_path and snapshot_path.exists():
                 remapped_pythonpath = build_pythonpath(snapshot_path)
 
-        # Serialize function and arguments
         serialized_func = cloudpickle.dumps(expr.func)
         serialized_args = cloudpickle.dumps(resolved_args)
         serialized_kwargs = cloudpickle.dumps(resolved_kwargs)
 
-        # Submit to pool (retry once if pool is broken)
-        submit_args = (
+        return (
             _worker_execute,
             serialized_func,
             serialized_args,
@@ -344,62 +298,28 @@ class ForkExecutor(Executor):
             remapped_pythonpath,
             self._checkpoint_path,
         )
-        try:
-            future = pool.submit(*submit_args)
-        except BrokenExecutor:
-            _log.warning(
-                "Process pool broken (worker crash / OOM?), creating new pool"
-            )
-            pool = self._get_pool()
-            future = pool.submit(*submit_args)
 
-        # Wrap the future
+    def submit(
+        self,
+        expr: TaskExpression,
+        resolved_args: tuple[Any, ...],
+        resolved_kwargs: dict[str, Any],
+    ) -> Future[ExecutionResult]:
+        """Submit a task for fork-based execution."""
+        submit_args = self._prepare_submission(
+            expr, resolved_args, resolved_kwargs
+        )
         result_future: Future[ExecutionResult] = Future()
 
-        def callback(f: Future) -> None:
+        def _run() -> None:
+            self._semaphore.acquire()
+            proc = ProcessPoolExecutor(
+                max_workers=1,
+                mp_context=self._mp_context,
+            )
             try:
-                success, result_bytes, stdout, stderr, error_bytes, card = (
-                    f.result()
-                )
-
-                if success:
-                    result = cloudpickle.loads(result_bytes)
-                    result_future.set_result(
-                        ExecutionResult(
-                            value=result,
-                            stdout=stdout,
-                            stderr=stderr,
-                            success=True,
-                            card=card,
-                        )
-                    )
-                else:
-                    error = (
-                        cloudpickle.loads(error_bytes) if error_bytes else None
-                    )
-                    result_future.set_result(
-                        ExecutionResult(
-                            value=None,
-                            stdout=stdout,
-                            stderr=stderr,
-                            success=False,
-                            error=error,
-                        )
-                    )
-            except BrokenExecutor as e:
-                _log.warning(
-                    "Worker process terminated abruptly (OOM / signal): %s", e
-                )
-                result_future.set_result(
-                    ExecutionResult(
-                        value=None,
-                        success=False,
-                        error=RuntimeError(
-                            f"Worker process terminated abruptly "
-                            f"(possible OOM): {e}"
-                        ),
-                    )
-                )
+                future = proc.submit(*submit_args)
+                SubprocessExecutor._handle_worker_result(future, result_future)
             except Exception as e:
                 result_future.set_result(
                     ExecutionResult(
@@ -408,33 +328,16 @@ class ForkExecutor(Executor):
                         error=e,
                     )
                 )
+            finally:
+                proc.shutdown(wait=True)
+                self._semaphore.release()
 
-        future.add_done_callback(callback)
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
         return result_future
 
     def shutdown(self, wait: bool = True) -> None:
-        """Shutdown the process pool.
-
-        Args:
-            wait: If True, wait for workers to finish gracefully.
-                  If False, kill worker processes immediately.
-        """
-        if self._pool is not None:
-            if wait:
-                self._pool.shutdown(wait=True)
-            else:
-                self._pool.shutdown(wait=False, cancel_futures=True)
-                self._kill_workers()
-            self._pool = None
-
-    def _kill_workers(self) -> None:
-        """Terminate all worker processes in the pool."""
-        processes = getattr(self._pool, "_processes", None)
-        if processes:
-            for pid, proc in list(processes.items()):
-                if proc.is_alive():
-                    proc.kill()
-                proc.join(timeout=5)
+        """No persistent pool to shut down."""
 
     def __repr__(self) -> str:
         return f"ForkExecutor(max_workers={self._max_workers}, capture={self._capture})"
