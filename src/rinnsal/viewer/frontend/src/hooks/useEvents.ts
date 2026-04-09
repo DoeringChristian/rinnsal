@@ -12,7 +12,7 @@ import {
   CardData,
 } from "../lib/api";
 
-export type Tab = "scalars" | "text" | "figures" | "images" | "cards" | "compare";
+export type Tab = "scalars" | "text" | "figures" | "images" | "cards" | "compare" | "graph";
 
 interface UseEventsResult {
   scalars: Map<string, ScalarData>;
@@ -44,8 +44,9 @@ export function useEvents(
   const stableRuns = useMemo(() => selectedRuns, [selectedRunsKey]);
 
   const fetchTab = useCallback(async (tab: Tab, runs: string[]) => {
-    // "compare" tab doesn't fetch — slots fetch their own data
-    if (tab === "compare") return;
+    // "compare" tab doesn't fetch — slots fetch their own data.
+    // "graph" tab fetches its own flow data, independent of selected runs.
+    if (tab === "compare" || tab === "graph") return;
 
     const cache = cacheRef.current;
     const getMap = () => {

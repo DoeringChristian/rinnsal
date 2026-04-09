@@ -105,6 +105,10 @@ class Logger:
                     self._write_card(*args)
                 elif op == "image":
                     self._write_image(*args)
+                elif op == "task_node":
+                    self._write_task_node(*args)
+                elif op == "task_edge":
+                    self._write_task_edge(*args)
             except Exception:
                 import traceback
                 import sys
@@ -242,6 +246,50 @@ class Logger:
         ts = self._get_timestamp()
         self._queue.put(("card", (task, kind, title, content, image, it, ts)))
 
+    def add_task_node(
+        self,
+        task_name: str,
+        task_hash: str,
+        status: str,
+        duration: float = 0.0,
+        error: str = "",
+        it: int | None = None,
+    ) -> None:
+        """Log a task node event (DAG structure + last run info).
+
+        Args:
+            task_name: Stable task identity across runs.
+            task_hash: Specific invocation hash.
+            status: "success" | "failed" | "cached" | "running".
+            duration: Elapsed seconds.
+            error: Error message (when failed).
+            it: Iteration number. If None, uses current iteration.
+        """
+        if it is None:
+            it = self._iteration
+        ts = self._get_timestamp()
+        self._queue.put(
+            ("task_node", (task_name, task_hash, status, duration, error, it, ts))
+        )
+
+    def add_task_edge(
+        self,
+        from_task: str,
+        to_task: str,
+        it: int | None = None,
+    ) -> None:
+        """Log a task dependency edge.
+
+        Args:
+            from_task: Task name of the dependency.
+            to_task: Task name of the dependent.
+            it: Iteration number. If None, uses current iteration.
+        """
+        if it is None:
+            it = self._iteration
+        ts = self._get_timestamp()
+        self._queue.put(("task_edge", (from_task, to_task, it, ts)))
+
     def add_image(
         self, tag: str, image: Any, it: int | None = None
     ) -> None:
@@ -361,6 +409,45 @@ class Logger:
         event.iteration = it
         event.card.CopyFrom(
             Card(task=task, kind=kind, title=title, content=content, image=image)
+        )
+        self._event_writer.write(event)
+
+    def _write_task_node(
+        self,
+        task_name: str,
+        task_hash: str,
+        status: str,
+        duration: float,
+        error: str,
+        it: int,
+        ts: float,
+    ) -> None:
+        from rinnsal.logger.events_pb2 import Event, TaskNode
+
+        event = Event()
+        event.timestamp = ts
+        event.iteration = it
+        event.task_node.CopyFrom(
+            TaskNode(
+                task_name=task_name,
+                task_hash=task_hash,
+                status=status,
+                duration=duration,
+                error=error,
+            )
+        )
+        self._event_writer.write(event)
+
+    def _write_task_edge(
+        self, from_task: str, to_task: str, it: int, ts: float
+    ) -> None:
+        from rinnsal.logger.events_pb2 import Event, TaskEdge
+
+        event = Event()
+        event.timestamp = ts
+        event.iteration = it
+        event.task_edge.CopyFrom(
+            TaskEdge(from_task=from_task, to_task=to_task)
         )
         self._event_writer.write(event)
 

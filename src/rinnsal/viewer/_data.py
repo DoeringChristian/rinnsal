@@ -77,6 +77,8 @@ class RunCache:
         "text",
         "figures",
         "images",
+        "task_nodes",
+        "task_edges",
         "file_mtime",
         "file_size",
     )
@@ -86,6 +88,10 @@ class RunCache:
         self.text: dict[str, list[tuple[int, str]]] = {}
         self.figures: dict[str, list[tuple[int, bytes, bytes, bool]]] = {}
         self.images: dict[str, list[tuple[int, bytes, int, int]]] = {}  # tag → [(it, png_bytes, w, h)]
+        # List of (task_name, task_hash, status, duration, error, timestamp)
+        self.task_nodes: list[tuple[str, str, str, float, str, float]] = []
+        # List of (from_task, to_task)
+        self.task_edges: list[tuple[str, str]] = []
         self.file_mtime: float = 0.0
         self.file_size: int = 0
 
@@ -101,6 +107,8 @@ class RunCache:
         self.text.clear()
         self.figures.clear()
         self.images.clear()
+        self.task_nodes.clear()
+        self.task_edges.clear()
 
         reader = EventFileReader(events_path)
         for event in reader:
@@ -149,6 +157,23 @@ class RunCache:
                         event.image.height,
                     )
                 )
+
+            elif data_type == "task_node":
+                tn = event.task_node
+                self.task_nodes.append(
+                    (
+                        tn.task_name,
+                        tn.task_hash,
+                        tn.status,
+                        tn.duration,
+                        tn.error,
+                        event.timestamp,
+                    )
+                )
+
+            elif data_type == "task_edge":
+                te = event.task_edge
+                self.task_edges.append((te.from_task, te.to_task))
 
         # Sort all by iteration
         for tag in self.scalars:
@@ -219,6 +244,32 @@ def discover_runs(root_path: Path) -> list[Path]:
                 runs.extend(discover_runs(item))
 
     return sorted(runs)
+
+
+def discover_flows(root_path: Path) -> dict[str, list[Path]]:
+    """Find flows and their runs under ``<root>/flows/<flow_name>/runs/*``.
+
+    Returns a dict mapping flow name to a list of run directories,
+    sorted newest-first by directory name.
+    """
+    result: dict[str, list[Path]] = {}
+    flows_dir = root_path / "flows"
+    if not flows_dir.is_dir():
+        return result
+
+    for flow_dir in flows_dir.iterdir():
+        if not flow_dir.is_dir():
+            continue
+        runs_dir = flow_dir / "runs"
+        if not runs_dir.is_dir():
+            continue
+        runs = [
+            p for p in runs_dir.iterdir()
+            if p.is_dir() and is_run_directory(p)
+        ]
+        if runs:
+            result[flow_dir.name] = sorted(runs, reverse=True)
+    return result
 
 
 def load_scalars_timeseries(

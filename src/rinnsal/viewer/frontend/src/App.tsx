@@ -6,6 +6,8 @@ import FigureViewer from "./components/FigureViewer";
 import ImageViewer from "./components/ImageViewer";
 import CardViewer from "./components/CardViewer";
 import CompareView, { useCompareGroups } from "./components/CompareView";
+import FlowSidebar from "./components/FlowSidebar";
+import FlowGraph from "./components/FlowGraph";
 import { useEvents, Tab } from "./hooks/useEvents";
 import { fetchConfig } from "./lib/api";
 
@@ -15,6 +17,7 @@ function loadPersistedState(): {
   rootDir?: string;
   selectedRuns?: string[];
   activeTab?: Tab;
+  selectedFlow?: string | null;
   scrollTop?: number;
 } {
   try {
@@ -28,6 +31,7 @@ function persistState(state: {
   rootDir: string;
   selectedRuns: string[];
   activeTab: Tab;
+  selectedFlow: string | null;
   scrollTop: number;
 }) {
   try {
@@ -40,6 +44,7 @@ export default function App() {
   const [rootDir, setRootDir] = useState(persisted.rootDir || "");
   const [selectedRuns, setSelectedRuns] = useState<string[]>(persisted.selectedRuns || []);
   const [activeTab, setActiveTab] = useState<Tab>(persisted.activeTab || "scalars");
+  const [selectedFlow, setSelectedFlow] = useState<string | null>(persisted.selectedFlow ?? null);
   const [refreshKey, setRefreshKey] = useState(0);
   const contentRef = useRef<HTMLDivElement>(null);
   const scrollTopRef = useRef(persisted.scrollTop || 0);
@@ -57,8 +62,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    persistState({ rootDir, selectedRuns, activeTab, scrollTop: scrollTopRef.current });
-  }, [rootDir, selectedRuns, activeTab]);
+    persistState({ rootDir, selectedRuns, activeTab, selectedFlow, scrollTop: scrollTopRef.current });
+  }, [rootDir, selectedRuns, activeTab, selectedFlow]);
 
   useEffect(() => {
     const el = contentRef.current;
@@ -66,11 +71,11 @@ export default function App() {
     const onScroll = () => { scrollTopRef.current = el.scrollTop; };
     el.addEventListener("scroll", onScroll, { passive: true });
     const onBeforeUnload = () => {
-      persistState({ rootDir, selectedRuns, activeTab, scrollTop: scrollTopRef.current });
+      persistState({ rootDir, selectedRuns, activeTab, selectedFlow, scrollTop: scrollTopRef.current });
     };
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => { el.removeEventListener("scroll", onScroll); window.removeEventListener("beforeunload", onBeforeUnload); };
-  }, [rootDir, selectedRuns, activeTab]);
+  }, [rootDir, selectedRuns, activeTab, selectedFlow]);
 
   useEffect(() => {
     if (!isLoading && contentRef.current && scrollTopRef.current > 0) {
@@ -83,7 +88,7 @@ export default function App() {
     refreshData();
   }, [refreshData]);
 
-  const tabs: Tab[] = ["scalars", "text", "figures", "images", "cards", "compare"];
+  const tabs: Tab[] = ["scalars", "text", "figures", "images", "cards", "compare", "graph"];
 
   return (
     <div className="flex h-screen bg-gray-50">
@@ -105,7 +110,16 @@ export default function App() {
           <input type="text" value={rootDir} onChange={(e) => setRootDir(e.target.value)} placeholder="/path/to/runs" className="w-full px-3 py-2 border border-gray-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-blue-500" />
         </div>
         <div className="flex-1 overflow-auto p-4">
-          <RunSelector rootDir={rootDir} selectedRuns={selectedRuns} onSelectionChange={setSelectedRuns} refreshKey={refreshKey} />
+          {activeTab === "graph" ? (
+            <FlowSidebar
+              rootDir={rootDir}
+              selectedFlow={selectedFlow}
+              onSelectFlow={setSelectedFlow}
+              refreshKey={refreshKey}
+            />
+          ) : (
+            <RunSelector rootDir={rootDir} selectedRuns={selectedRuns} onSelectionChange={setSelectedRuns} refreshKey={refreshKey} />
+          )}
         </div>
       </aside>
 
@@ -131,8 +145,21 @@ export default function App() {
           </div>
         </nav>
 
-        <div ref={contentRef} className="flex-1 overflow-auto p-4">
-          {activeTab !== "compare" && selectedRuns.length === 0 ? (
+        <div
+          ref={contentRef}
+          className={`flex-1 overflow-auto relative ${activeTab === "graph" ? "p-0" : "p-4"}`}
+        >
+          {activeTab === "graph" ? (
+            <FlowGraph
+              rootDir={rootDir}
+              flowName={selectedFlow}
+              refreshKey={refreshKey}
+              onOpenRun={(runPath) => {
+                setSelectedRuns([runPath]);
+                setActiveTab("scalars");
+              }}
+            />
+          ) : activeTab !== "compare" && selectedRuns.length === 0 ? (
             <div className="text-center text-gray-500 mt-8">Select runs from the sidebar to view data.</div>
           ) : isLoading && activeTab !== "compare" ? (
             <div className="text-center text-gray-500 mt-8">Loading...</div>

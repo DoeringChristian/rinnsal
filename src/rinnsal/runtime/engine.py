@@ -70,16 +70,50 @@ class ExecutionEngine:
         # Get topological order
         ordered = dag.topological_sort()
 
+        # Emit DAG structure (TaskEdge events) to the context logger.
+        # Each edge is emitted once per call to evaluate. Only named
+        # tasks are represented — anonymous lambdas are skipped.
+        from rinnsal.context import current as _ctx
+        ctx_logger = _ctx.logger
+        if ctx_logger is not None:
+            seen_edges: set[tuple[str, str]] = set()
+            for expr in ordered:
+                if not expr.task_name:
+                    continue
+                for dep_hash in dag.get_dependencies(expr.hash):
+                    dep_expr = dag.get_node(dep_hash)
+                    if dep_expr is None or not dep_expr.task_name:
+                        continue
+                    edge = (dep_expr.task_name, expr.task_name)
+                    if edge in seen_edges:
+                        continue
+                    seen_edges.add(edge)
+                    ctx_logger.add_task_edge(
+                        from_task=edge[0], to_task=edge[1]
+                    )
+
         # Evaluate each task in order
         for expr in ordered:
             if expr.hash in self._evaluated:
                 # Hash found in engine cache - ensure expression has the result
                 if not expr.is_evaluated:
                     expr.set_result(self._evaluated[expr.hash])
+                if ctx_logger is not None and expr.task_name:
+                    ctx_logger.add_task_node(
+                        task_name=expr.task_name,
+                        task_hash=expr.hash,
+                        status="cached",
+                    )
                 continue
 
             if expr.is_evaluated:
                 self._evaluated[expr.hash] = expr.result
+                if ctx_logger is not None and expr.task_name:
+                    ctx_logger.add_task_node(
+                        task_name=expr.task_name,
+                        task_hash=expr.hash,
+                        status="cached",
+                    )
                 continue
 
             # Resolve arguments
@@ -99,10 +133,31 @@ class ExecutionEngine:
                 checkpoint_path = task_dir / "checkpoint.dat"
 
             # Execute the task
-            result, log, card = self._execute_with_retry(
-                expr, resolved_args, resolved_kwargs,
-                checkpoint_path=checkpoint_path,
-            )
+            _task_t0 = datetime.now()
+            try:
+                result, log, card = self._execute_with_retry(
+                    expr, resolved_args, resolved_kwargs,
+                    checkpoint_path=checkpoint_path,
+                )
+            except Exception as _exc:
+                if ctx_logger is not None and expr.task_name:
+                    ctx_logger.add_task_node(
+                        task_name=expr.task_name,
+                        task_hash=expr.hash,
+                        status="failed",
+                        duration=(datetime.now() - _task_t0).total_seconds(),
+                        error=str(_exc),
+                    )
+                raise
+            _task_elapsed = (datetime.now() - _task_t0).total_seconds()
+
+            if ctx_logger is not None and expr.task_name:
+                ctx_logger.add_task_node(
+                    task_name=expr.task_name,
+                    task_hash=expr.hash,
+                    status="success",
+                    duration=_task_elapsed,
+                )
 
             # Store the result
             expr.set_result(result)

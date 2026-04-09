@@ -18,6 +18,8 @@ message Event {
     Checkpoint checkpoint = 6;
     Card card = 7;
     Image image = 8;
+    TaskNode task_node = 9;
+    TaskEdge task_edge = 10;
   }
 }
 
@@ -57,4 +59,17 @@ message Image {
   int32 width = 3;
   int32 height = 4;
   string format = 5;         // "png", "jpeg", etc.
+}
+
+message TaskNode {
+  string task_name = 1;      // stable identity key across runs
+  string task_hash = 2;      // specific invocation hash
+  string status = 3;         // "success" | "failed" | "cached" | "running"
+  double duration = 4;       // elapsed seconds
+  string error = 5;          // error message (when failed)
+}
+
+message TaskEdge {
+  string from_task = 1;      // dependency task_name
+  string to_task = 2;        // dependent task_name
 }

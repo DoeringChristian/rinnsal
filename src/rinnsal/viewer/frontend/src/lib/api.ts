@@ -85,3 +85,61 @@ export async function fetchCards(runPath: string): Promise<CardData> {
   if (!response.ok) throw new Error(`Failed to fetch cards: ${response.statusText}`);
   return response.json();
 }
+
+/** Task node from the flow DAG aggregated across runs. */
+export interface FlowNode {
+  name: string;
+  task_hash: string;
+  status: "success" | "failed" | "cached" | "running" | string;
+  duration: number;
+  error: string;
+  timestamp: number;
+  run_count: number;
+}
+
+/** Dependency edge between two task names. */
+export interface FlowEdge {
+  from: string;
+  to: string;
+}
+
+/** A flow's aggregated DAG overview. */
+export interface FlowInfo {
+  name: string;
+  run_count: number;
+  latest_run: string | null;
+  nodes: FlowNode[];
+  edges: FlowEdge[];
+}
+
+export async function fetchFlows(rootDir: string): Promise<FlowInfo[]> {
+  const response = await fetch(`/api/flows?root=${encodeURIComponent(rootDir)}`);
+  if (!response.ok) throw new Error(`Failed to fetch flows: ${response.statusText}`);
+  const data: { flows: FlowInfo[] } = await response.json();
+  return data.flows;
+}
+
+/** Per-run history entry for a task within a flow. */
+export interface TaskHistoryEntry {
+  run_id: string;
+  run_path: string;
+  status: string;
+  duration: number;
+  timestamp: number;
+  error: string;
+  task_hash: string;
+}
+
+export async function fetchTaskHistory(
+  rootDir: string,
+  flowName: string,
+  taskName: string,
+): Promise<TaskHistoryEntry[]> {
+  const url =
+    `/api/flows/${encodeURIComponent(flowName)}/tasks/${encodeURIComponent(taskName)}/history` +
+    `?root=${encodeURIComponent(rootDir)}`;
+  const response = await fetch(url);
+  if (!response.ok) throw new Error(`Failed to fetch task history: ${response.statusText}`);
+  const data: { history: TaskHistoryEntry[] } = await response.json();
+  return data.history;
+}
