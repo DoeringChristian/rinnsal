@@ -347,6 +347,16 @@ class ExecutionEngine:
                             image=image,
                         )
 
+            # Replay logger events collected by LoggerProxy in the worker.
+            # This covers add_scalar, add_figure, etc. called by user
+            # code inside the task function on any remote executor.
+            if result.logger_events:
+                from rinnsal.context import current as _ctx2
+                _replay_logger = _ctx2.logger
+                if _replay_logger is not None:
+                    from rinnsal.logger.proxy import replay_events
+                    replay_events(_replay_logger, result.logger_events)
+
             if result.success:
                 return result.value, combined_log, result.card
 

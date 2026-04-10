@@ -162,12 +162,24 @@ class SSHExecutor(Executor):
     async def _async_execute(
         self, host: SSHHost, encoded_payload: str
     ) -> ExecutionResult:
-        """Execute a task on a remote host asynchronously."""
-        # Build remote Python script
+        """Execute a task on a remote host asynchronously.
+
+        Logger events are streamed back in real-time over stderr using a
+        magic-prefixed binary protocol (see ``rinnsal.logger.proxy``).
+        The task result is returned as base64-encoded cloudpickle on stdout.
+        """
+        import asyncio
+        import struct
+
+        from rinnsal.logger.proxy import STREAM_MAGIC
+
+        # Build remote Python script.
+        # The script sets up a LoggerProxy that streams events to
+        # sys.stderr.buffer with the RNNSL magic prefix.  User-visible
+        # stderr is captured via redirect_stderr into a StringIO and
+        # included in the result dict (same as before).
         remote_script = f'''
-import base64
-import sys
-import io
+import base64, sys, io, struct
 from contextlib import redirect_stdout, redirect_stderr
 
 try:
@@ -185,6 +197,14 @@ args = cloudpickle.loads(payload["args"])
 kwargs = cloudpickle.loads(payload["kwargs"])
 capture = payload["capture"]
 
+# Set up logger proxy — streams events to real stderr in real-time
+from rinnsal.logger.proxy import LoggerProxy
+from rinnsal.context import Card, current
+
+proxy = LoggerProxy(stream=sys.stderr.buffer)
+current._set_logger(proxy)
+current._set_card(Card())
+
 stdout_capture = io.StringIO()
 stderr_capture = io.StringIO()
 
@@ -195,24 +215,30 @@ try:
     else:
         result = func(*args, **kwargs)
 
+    card = current._reset()
     output = {{
         "success": True,
         "result": cloudpickle.dumps(result),
         "stdout": stdout_capture.getvalue(),
         "stderr": stderr_capture.getvalue(),
         "error": None,
+        "card": card.serialize() if card else None,
     }}
 except Exception as e:
+    current._reset()
     output = {{
         "success": False,
         "result": None,
         "stdout": stdout_capture.getvalue(),
         "stderr": stderr_capture.getvalue(),
         "error": cloudpickle.dumps(e),
+        "card": None,
     }}
+finally:
+    current._reset_logger()
 
-# Output as base64-encoded cloudpickle
-import base64
+# Flush proxy, then print result to stdout
+proxy.flush()
 print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
 '''
 
@@ -251,51 +277,139 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
                 raise self._provision_errors[host.hostname]
 
             python_cmd = self._provisioner.python_command(self._work_dir)
-            result = await conn.run(
-                f"{python_cmd} -c '{remote_script}'",
-                check=False,
-            )
 
-            if result.exit_status != 0:
+            # Use create_process for streaming stderr access
+            async with conn.create_process(
+                f"{python_cmd} -c '{remote_script}'",
+            ) as proc:
+                # Read stderr in a background task, extracting event
+                # records (magic-prefixed) and relaying to local logger.
+                plain_stderr_parts: list[str] = []
+
+                async def _read_stderr() -> None:
+                    magic_len = len(STREAM_MAGIC)
+                    buf = b""
+                    while True:
+                        chunk = await proc.stderr.read(4096)
+                        if not chunk:
+                            break
+                        if isinstance(chunk, str):
+                            chunk = chunk.encode("latin-1")
+                        buf += chunk
+                        # Process complete records from buf
+                        while True:
+                            idx = buf.find(STREAM_MAGIC)
+                            if idx < 0:
+                                # No magic found — everything up to
+                                # the last (magic_len - 1) bytes is
+                                # plain text (keep the tail as potential
+                                # partial magic).
+                                safe = len(buf) - (magic_len - 1)
+                                if safe > 0:
+                                    plain_stderr_parts.append(
+                                        buf[:safe].decode("utf-8", errors="replace")
+                                    )
+                                    buf = buf[safe:]
+                                break
+                            # Flush any plain text before the magic
+                            if idx > 0:
+                                plain_stderr_parts.append(
+                                    buf[:idx].decode("utf-8", errors="replace")
+                                )
+                            buf = buf[idx + magic_len:]
+                            # Need 4 bytes for length
+                            if len(buf) < 4:
+                                # Wait for more data
+                                more = await proc.stderr.read(4 - len(buf))
+                                if not more:
+                                    break
+                                if isinstance(more, str):
+                                    more = more.encode("latin-1")
+                                buf += more
+                            if len(buf) < 4:
+                                break
+                            length = struct.unpack("<I", buf[:4])[0]
+                            buf = buf[4:]
+                            # Read full event data
+                            while len(buf) < length:
+                                more = await proc.stderr.read(length - len(buf))
+                                if not more:
+                                    break
+                                if isinstance(more, str):
+                                    more = more.encode("latin-1")
+                                buf += more
+                            if len(buf) < length:
+                                break
+                            # Parse and relay the event
+                            if self._logger is not None:
+                                from rinnsal.logger.events_pb2 import Event
+                                ev = Event()
+                                ev.ParseFromString(buf[:length])
+                                self._logger._event_writer.write(ev)
+                                self._logger._event_writer.flush()
+                            buf = buf[length:]
+                    # Remaining buf is plain text
+                    if buf:
+                        plain_stderr_parts.append(
+                            buf.decode("utf-8", errors="replace")
+                        )
+
+                stderr_task = asyncio.ensure_future(_read_stderr())
+
+                # Read stdout (result)
+                stdout_data = await proc.stdout.read()
+                if isinstance(stdout_data, bytes):
+                    stdout_data = stdout_data.decode("utf-8", errors="replace")
+
+                await stderr_task
+                await proc.wait()
+
+            exit_status = proc.exit_status
+            plain_stderr = "".join(plain_stderr_parts)
+
+            if exit_status != 0:
                 return ExecutionResult(
                     value=None,
-                    stdout=result.stdout or "",
-                    stderr=result.stderr or "",
+                    stdout=stdout_data or "",
+                    stderr=plain_stderr,
                     success=False,
                     error=RuntimeError(
-                        f"Remote execution failed: {result.stderr}"
+                        f"Remote execution failed (exit {exit_status}): "
+                        f"{plain_stderr}"
                     ),
                 )
 
-            # Parse output
+            # Parse result from stdout
             try:
-                output_bytes = base64.b64decode(result.stdout.strip())
+                output_bytes = base64.b64decode(stdout_data.strip())
                 output = cloudpickle.loads(output_bytes)
 
                 if output["success"]:
                     return ExecutionResult(
                         value=cloudpickle.loads(output["result"]),
                         stdout=output["stdout"],
-                        stderr=output["stderr"],
+                        stderr=output["stderr"] + plain_stderr,
                         success=True,
+                        card=output.get("card"),
                     )
                 else:
                     return ExecutionResult(
                         value=None,
                         stdout=output["stdout"],
-                        stderr=output["stderr"],
+                        stderr=output["stderr"] + plain_stderr,
                         success=False,
                         error=(
                             cloudpickle.loads(output["error"])
                             if output["error"]
                             else None
                         ),
+                        card=output.get("card"),
                     )
             except Exception as e:
                 return ExecutionResult(
                     value=None,
-                    stdout=result.stdout or "",
-                    stderr=result.stderr or "",
+                    stdout=stdout_data or "",
+                    stderr=plain_stderr,
                     success=False,
                     error=e,
                 )

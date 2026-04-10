@@ -21,6 +21,7 @@ class ExecutionResult:
     success: bool = True
     error: Exception | None = None
     card: list[dict] | None = None
+    logger_events: bytes = b""
 
 
 class Executor(ABC):
@@ -39,6 +40,15 @@ class Executor(ABC):
         self._capture = capture
         self._snapshot = snapshot
         self._checkpoint_path: str | None = None
+        self._logger: Any = None
+
+    def set_logger(self, logger: Any) -> None:
+        """Set the logger for relaying events from remote workers.
+
+        Called by the flow runner after the Logger is created so that
+        streaming executors (e.g. SSH) can relay events in real-time.
+        """
+        self._logger = logger
 
     @property
     def capture(self) -> bool:

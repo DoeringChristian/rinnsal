@@ -340,8 +340,8 @@ class TestSlurmExecutor:
 
         assert "cloudpickle.load" in script
         assert "cloudpickle.dump" in script
-        assert '("success"' in script
-        assert '("error"' in script
+        assert '"success"' in script
+        assert '"error"' in script
 
     def test_worker_script_with_checkpoint(self):
         from rinnsal.execution.slurm import _make_worker_script

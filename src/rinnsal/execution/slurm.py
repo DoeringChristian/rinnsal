@@ -213,18 +213,34 @@ import traceback
 
 {checkpoint_block}
 
+# Set up logger proxy for relaying events back to orchestrator
+from rinnsal.logger.proxy import LoggerProxy
+from rinnsal.context import Card, current
+_proxy = LoggerProxy()
+current._set_logger(_proxy)
+current._set_card(Card())
+
 # Load and execute
 with open("{submission_pkl}", "rb") as f:
     func, args, kwargs = cloudpickle.load(f)
 
 try:
     result = func(*args, **kwargs)
+    _card = current._reset()
     with open("{result_pkl}", "wb") as f:
-        cloudpickle.dump(("success", result, None), f)
+        cloudpickle.dump((
+            "success", result, None, _proxy.get_buffer(),
+            _card.serialize() if _card else None,
+        ), f)
 except Exception as e:
+    current._reset()
     tb = traceback.format_exc()
     with open("{result_pkl}", "wb") as f:
-        cloudpickle.dump(("error", e, tb), f)
+        cloudpickle.dump((
+            "error", e, tb, _proxy.get_buffer(), None,
+        ), f)
+finally:
+    current._reset_logger()
 """
 
 
@@ -324,6 +340,12 @@ def _poll_slurm_job(
                 with open(result_pkl, "rb") as f:
                     outcome = cloudpickle.load(f)
 
+                # Unpack: (status, result|error, traceback|None,
+                #          logger_events, card)
+                # Legacy 3-tuples still work (no logger_events/card).
+                logger_events = outcome[3] if len(outcome) > 3 else b""
+                card = outcome[4] if len(outcome) > 4 else None
+
                 if outcome[0] == "success":
                     future.set_result(
                         ExecutionResult(
@@ -331,10 +353,12 @@ def _poll_slurm_job(
                             stdout=stdout,
                             stderr=stderr,
                             success=True,
+                            logger_events=logger_events or b"",
+                            card=card,
                         )
                     )
                 else:
-                    # ("error", exception, traceback_str)
+                    # ("error", exception, traceback_str, ...)
                     future.set_result(
                         ExecutionResult(
                             value=None,
@@ -342,6 +366,8 @@ def _poll_slurm_job(
                             stderr=stderr + (outcome[2] or ""),
                             success=False,
                             error=outcome[1],
+                            logger_events=logger_events or b"",
+                            card=card,
                         )
                     )
             except Exception as e:

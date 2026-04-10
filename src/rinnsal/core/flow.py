@@ -184,6 +184,7 @@ class FlowResult:
 
         logger = Logger(run_dir)
         current._set_logger(logger)
+        engine.executor.set_logger(logger)
         logger.add_text("flow/info", f"Flow: {self._flow_name}")
 
         # Determine which tasks to execute vs load from cache

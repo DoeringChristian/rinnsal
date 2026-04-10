@@ -27,11 +27,12 @@ def _worker_execute(
     capture: bool,
     remapped_pythonpath: str | None = None,
     checkpoint_path: str | None = None,
-) -> tuple[bool, Any, str, str, bytes | None, list[dict] | None]:
+) -> tuple[bool, Any, str, str, bytes | None, list[dict] | None, bytes]:
     """Worker function that runs in a subprocess.
 
     Returns:
-        Tuple of (success, result_or_error, stdout, stderr, serialized_error, card)
+        Tuple of (success, result_or_error, stdout, stderr,
+                  serialized_error, card, logger_events)
     """
     import io
     import sys
@@ -53,8 +54,11 @@ def _worker_execute(
     stderr_capture = io.StringIO()
 
     from rinnsal.context import Card, Checkpoint, current
+    from rinnsal.logger.proxy import LoggerProxy
 
     current._set_card(Card())
+    proxy = LoggerProxy()
+    current._set_logger(proxy)
     if checkpoint_path:
         current._set_checkpoint(Checkpoint(path=Path(checkpoint_path)))
     try:
@@ -75,6 +79,7 @@ def _worker_execute(
             stderr_capture.getvalue(),
             None,
             card.serialize() if card else None,
+            proxy.get_buffer(),
         )
     except Exception as e:
         import traceback
@@ -90,8 +95,10 @@ def _worker_execute(
             stderr_val,
             cloudpickle.dumps(e),
             None,
+            proxy.get_buffer(),
         )
     finally:
+        current._reset_logger()
         # Restore original sys.path
         if original_path is not None:
             sys.path = original_path
@@ -159,9 +166,10 @@ class SubprocessExecutor(Executor):
     ) -> None:
         """Handle the result from a worker future."""
         try:
-            success, result_bytes, stdout, stderr, error_bytes, card = (
-                f.result()
-            )
+            (
+                success, result_bytes, stdout, stderr,
+                error_bytes, card, logger_events,
+            ) = f.result()
 
             if success:
                 result = cloudpickle.loads(result_bytes)
@@ -172,6 +180,7 @@ class SubprocessExecutor(Executor):
                         stderr=stderr,
                         success=True,
                         card=card,
+                        logger_events=logger_events,
                     )
                 )
             else:
@@ -185,6 +194,7 @@ class SubprocessExecutor(Executor):
                         stderr=stderr,
                         success=False,
                         error=error,
+                        logger_events=logger_events,
                     )
                 )
         except Exception as e:

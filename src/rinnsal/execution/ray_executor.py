@@ -18,6 +18,64 @@ except ImportError:
     HAS_RAY = False
 
 
+if HAS_RAY:
+
+    @ray.remote
+    def _ray_execute_task(
+        func: Any,
+        args: tuple,
+        kwargs: dict,
+        capture: bool,
+    ) -> tuple[bool, Any, str, str, Any, bytes, list[dict] | None]:
+        """Ray remote function that executes a task with logger proxy."""
+        import io
+        from contextlib import redirect_stderr, redirect_stdout
+
+        from rinnsal.context import Card, current
+        from rinnsal.logger.proxy import LoggerProxy
+
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
+
+        proxy = LoggerProxy()
+        current._set_logger(proxy)
+        current._set_card(Card())
+
+        try:
+            if capture:
+                with (
+                    redirect_stdout(stdout_capture),
+                    redirect_stderr(stderr_capture),
+                ):
+                    result = func(*args, **kwargs)
+            else:
+                result = func(*args, **kwargs)
+
+            card = current._reset()
+            return (
+                True,
+                result,
+                stdout_capture.getvalue(),
+                stderr_capture.getvalue(),
+                None,
+                proxy.get_buffer(),
+                card.serialize() if card else None,
+            )
+        except Exception as e:
+            current._reset()
+            return (
+                False,
+                None,
+                stdout_capture.getvalue(),
+                stderr_capture.getvalue(),
+                e,
+                proxy.get_buffer(),
+                None,
+            )
+        finally:
+            current._reset_logger()
+
+
 class RayExecutor(Executor):
     """Executor that distributes tasks across a Ray cluster.
 
@@ -76,49 +134,7 @@ class RayExecutor(Executor):
         """Submit a task for Ray execution."""
         self._ensure_initialized()
 
-        # Create a Ray remote function wrapper
-        @ray.remote
-        def execute_task(
-            func: Any,
-            args: tuple,
-            kwargs: dict,
-            capture: bool,
-        ) -> tuple[bool, Any, str, str, Any]:
-            import io
-            import sys
-            from contextlib import redirect_stderr, redirect_stdout
-
-            stdout_capture = io.StringIO()
-            stderr_capture = io.StringIO()
-
-            try:
-                if capture:
-                    with (
-                        redirect_stdout(stdout_capture),
-                        redirect_stderr(stderr_capture),
-                    ):
-                        result = func(*args, **kwargs)
-                else:
-                    result = func(*args, **kwargs)
-
-                return (
-                    True,
-                    result,
-                    stdout_capture.getvalue(),
-                    stderr_capture.getvalue(),
-                    None,
-                )
-            except Exception as e:
-                return (
-                    False,
-                    None,
-                    stdout_capture.getvalue(),
-                    stderr_capture.getvalue(),
-                    e,
-                )
-
-        # Submit to Ray
-        ray_future = execute_task.remote(
+        ray_future = _ray_execute_task.remote(
             expr.func,
             resolved_args,
             resolved_kwargs,
@@ -130,7 +146,10 @@ class RayExecutor(Executor):
 
         def fetch_result() -> None:
             try:
-                success, result, stdout, stderr, error = ray.get(ray_future)
+                (
+                    success, result, stdout, stderr,
+                    error, logger_events, card,
+                ) = ray.get(ray_future)
 
                 if success:
                     result_future.set_result(
@@ -139,6 +158,8 @@ class RayExecutor(Executor):
                             stdout=stdout,
                             stderr=stderr,
                             success=True,
+                            logger_events=logger_events or b"",
+                            card=card,
                         )
                     )
                 else:
@@ -149,6 +170,8 @@ class RayExecutor(Executor):
                             stderr=stderr,
                             success=False,
                             error=error,
+                            logger_events=logger_events or b"",
+                            card=card,
                         )
                     )
             except Exception as e:
@@ -177,53 +200,17 @@ class RayExecutor(Executor):
         """Execute a task synchronously using Ray."""
         self._ensure_initialized()
 
-        @ray.remote
-        def execute_task(
-            func: Any,
-            args: tuple,
-            kwargs: dict,
-            capture: bool,
-        ) -> tuple[bool, Any, str, str, Any]:
-            import io
-            from contextlib import redirect_stderr, redirect_stdout
-
-            stdout_capture = io.StringIO()
-            stderr_capture = io.StringIO()
-
-            try:
-                if capture:
-                    with (
-                        redirect_stdout(stdout_capture),
-                        redirect_stderr(stderr_capture),
-                    ):
-                        result = func(*args, **kwargs)
-                else:
-                    result = func(*args, **kwargs)
-
-                return (
-                    True,
-                    result,
-                    stdout_capture.getvalue(),
-                    stderr_capture.getvalue(),
-                    None,
-                )
-            except Exception as e:
-                return (
-                    False,
-                    None,
-                    stdout_capture.getvalue(),
-                    stderr_capture.getvalue(),
-                    e,
-                )
-
         try:
-            ray_future = execute_task.remote(
+            ray_future = _ray_execute_task.remote(
                 expr.func,
                 resolved_args,
                 resolved_kwargs,
                 self._capture,
             )
-            success, result, stdout, stderr, error = ray.get(ray_future)
+            (
+                success, result, stdout, stderr,
+                error, logger_events, card,
+            ) = ray.get(ray_future)
 
             if success:
                 return ExecutionResult(
@@ -231,6 +218,8 @@ class RayExecutor(Executor):
                     stdout=stdout,
                     stderr=stderr,
                     success=True,
+                    logger_events=logger_events or b"",
+                    card=card,
                 )
             else:
                 return ExecutionResult(
@@ -239,6 +228,8 @@ class RayExecutor(Executor):
                     stderr=stderr,
                     success=False,
                     error=error,
+                    logger_events=logger_events or b"",
+                    card=card,
                 )
         except Exception as e:
             return ExecutionResult(
