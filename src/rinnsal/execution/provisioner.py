@@ -132,10 +132,12 @@ class PixiProvisioner:
                 lines.append(f"pixi run pip install --quiet {work_dir}/{path}")
         # Ensure cloudpickle is available
         lines.append("pixi run pip install --quiet cloudpickle 2>/dev/null || true")
-        # Run custom provision script if present (for builds like cmake/mitsuba)
+        # Run custom provision script if present (for builds like cmake/mitsuba).
+        # Uses "pixi run bash" so the script sees the pixi-managed Python
+        # and all dependencies on PATH.
         provision_sh = self._project_dir / ".rinnsal-provision.sh"
         if provision_sh.exists():
-            lines.append(f"bash {work_dir}/.rinnsal-provision.sh")
+            lines.append(f"pixi run bash {work_dir}/.rinnsal-provision.sh")
         return "\n".join(lines)
 
     def python_command(self, work_dir: str) -> str:
