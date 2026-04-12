@@ -75,14 +75,30 @@ function saveGroups(groups: CompareGroup[]) {
 
 // ─── Slot Renderer ───────────────────────────────────────────────
 
+// Auto-incrementing tick for cache busting in compare view
+let _globalCompareTick = 0;
+
+function useRefreshTick(intervalMs = 5000): number {
+  const [tick, setTick] = useState(() => _globalCompareTick);
+  useEffect(() => {
+    const id = setInterval(() => {
+      _globalCompareTick++;
+      setTick(_globalCompareTick);
+    }, intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return tick;
+}
+
 function SlotContent({ slot, it }: { slot: CompareSlot; it: number }) {
   const runName = slot.run.split("/").pop() || slot.run;
+  const tick = useRefreshTick();
 
   if (slot.type === "figure") {
-    return <img src={figureImageUrl(slot.run, slot.tag, it)} alt={`${runName} / ${slot.tag} @ ${it}`} className="w-full h-auto rounded object-contain" loading="lazy" />;
+    return <img src={figureImageUrl(slot.run, slot.tag, it) + `&_v=${tick}`} alt={`${runName} / ${slot.tag} @ ${it}`} className="w-full h-auto rounded object-contain" loading="lazy" />;
   }
   if (slot.type === "image") {
-    return <img src={imageUrl(slot.run, slot.tag, it)} alt={`${runName} / ${slot.tag} @ ${it}`} className="w-full h-auto rounded object-contain" loading="lazy" />;
+    return <img src={imageUrl(slot.run, slot.tag, it) + `&_v=${tick}`} alt={`${runName} / ${slot.tag} @ ${it}`} className="w-full h-auto rounded object-contain" loading="lazy" />;
   }
   if (slot.type === "scalar") {
     return null; // Rendered in scalar panels
@@ -161,6 +177,7 @@ function DragNumberInput({ value, onChange, logScale: logDrag = false, title, pr
 /** Shows the scalar value at a given iteration. Fetches data (browser-cached). */
 function ScalarValueAt({ run, tag, it }: { run: string; tag: string; it: number }) {
   const [val, setVal] = useState<number | null>(null);
+  const tick = useRefreshTick();
   useEffect(() => {
     fetchScalars(run).then((d) => {
       const points = d[tag];
@@ -172,7 +189,7 @@ function ScalarValueAt({ run, tag, it }: { run: string; tag: string; it: number 
       }
       setVal(best.value);
     }).catch(() => {});
-  }, [run, tag, it]);
+  }, [run, tag, it, tick]);
 
   if (val === null) return <span className="text-xs text-gray-300">...</span>;
   return <span className="text-xs font-mono text-gray-600">{val.toPrecision(4)}</span>;
@@ -209,7 +226,10 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration, onSlotScaleChange }
   const slotsRef = useRef(slots);
   slotsRef.current = slots;
 
-  // Fetch data for all scalar slots
+  // Auto-refresh tick for live data
+  const refreshTick = useRefreshTick();
+
+  // Fetch data for all scalar slots (re-fetches every 5s via refreshTick)
   useEffect(() => {
     const toFetch = new Map<string, string[]>();
     for (const s of slots) {
@@ -230,7 +250,7 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration, onSlotScaleChange }
       }
       setAllData(next);
     }).catch(() => {});
-  }, [slots.map((s) => `${s.run}\0${s.tag}`).join("\n")]);
+  }, [slots.map((s) => `${s.run}\0${s.tag}`).join("\n"), refreshTick]);
 
   // Build and render chart
   useEffect(() => {
@@ -553,11 +573,12 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration, onSlotScaleChange }
 
 function TextSlotContent({ run, tag, it }: { run: string; tag: string; it: number }) {
   const [data, setData] = useState<{ it: number; value: string }[] | null>(null);
+  const tick = useRefreshTick();
   useEffect(() => {
     fetchText(run).then((d) => {
       if (d[tag]) setData(d[tag]);
     }).catch(() => {});
-  }, [run, tag]);
+  }, [run, tag, tick]);
 
   if (!data) return <div className="text-xs text-gray-400">Loading...</div>;
   const entry = data.find((d) => d.it === it) || data[data.length - 1];
