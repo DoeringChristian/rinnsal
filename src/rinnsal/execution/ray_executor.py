@@ -20,12 +20,44 @@ except ImportError:
 
 if HAS_RAY:
 
+    @ray.remote(num_cpus=0)
+    class _LoggerRelayActor:
+        """Ray actor that receives logger events and writes to events.pb.
+
+        Runs on the head node (where the orchestrator is) and writes
+        directly to the Logger's event file.  Workers send events via
+        fire-and-forget ``actor.log_event.remote(data)``.
+        """
+
+        def __init__(self) -> None:
+            self._event_writer = None
+
+        def init_writer(self, events_path: str) -> None:
+            from rinnsal.logger.event_file import EventFileWriter
+
+            self._event_writer = EventFileWriter(events_path)
+
+        def log_event(self, event_bytes: bytes) -> None:
+            if self._event_writer is None:
+                return
+            from rinnsal.logger.events_pb2 import Event
+
+            event = Event()
+            event.ParseFromString(event_bytes)
+            self._event_writer.write(event)
+            self._event_writer.flush()
+
+        def shutdown(self) -> None:
+            if self._event_writer is not None:
+                self._event_writer.flush()
+
     @ray.remote
     def _ray_execute_task(
         func: Any,
         args: tuple,
         kwargs: dict,
         capture: bool,
+        ray_actor_name: str | None = None,
     ) -> tuple[bool, Any, str, str, Any, bytes, list[dict] | None]:
         """Ray remote function that executes a task with logger proxy."""
         import io
@@ -37,7 +69,7 @@ if HAS_RAY:
         stdout_capture = io.StringIO()
         stderr_capture = io.StringIO()
 
-        proxy = LoggerProxy()
+        proxy = LoggerProxy(ray_actor_name=ray_actor_name)
         current._set_logger(proxy)
         current._set_card(Card())
 
@@ -94,6 +126,7 @@ class RayExecutor(Executor):
         num_cpus: int | None = None,
         address: str | None = None,
         runtime_env: dict[str, Any] | None = None,
+        auto_runtime_env: bool = True,
     ) -> None:
         if not HAS_RAY:
             raise ImportError(
@@ -104,13 +137,47 @@ class RayExecutor(Executor):
         super().__init__(capture=capture, snapshot=snapshot)
         self._num_cpus = num_cpus
         self._address = address
-        self._runtime_env = runtime_env
+        self._user_runtime_env = runtime_env
+        self._auto_runtime_env = auto_runtime_env
+        self._resolved_runtime_env: dict[str, Any] | None = None
         self._initialized = False
+        self._logger_actor: Any = None
+        self._logger_actor_name: str | None = None
+
+    def set_logger(self, logger: Any) -> None:
+        super().set_logger(logger)
+        if self._initialized:
+            self._create_logger_actor()
+
+    def _create_logger_actor(self) -> None:
+        """Create a relay actor on the head node for live logging."""
+        if self._logger is None or self._logger_actor is not None:
+            return
+        if not hasattr(self._logger, "_event_writer"):
+            return
+        import uuid
+
+        name = f"rinnsal_logger_{uuid.uuid4().hex[:8]}"
+        events_path = str(self._logger._event_writer._path)
+        actor = _LoggerRelayActor.options(name=name).remote()
+        ray.get(actor.init_writer.remote(events_path))
+        self._logger_actor = actor
+        self._logger_actor_name = name
 
     def _ensure_initialized(self) -> None:
         """Initialize Ray if not already initialized."""
         if self._initialized:
             return
+
+        # Build runtime_env from provisioner + user overrides
+        if self._auto_runtime_env:
+            from rinnsal.execution.provisioner import build_ray_runtime_env
+
+            self._resolved_runtime_env = build_ray_runtime_env(
+                user_runtime_env=self._user_runtime_env,
+            )
+        else:
+            self._resolved_runtime_env = self._user_runtime_env
 
         if not ray.is_initialized():
             init_kwargs: dict[str, Any] = {}
@@ -118,12 +185,16 @@ class RayExecutor(Executor):
                 init_kwargs["address"] = self._address
             if self._num_cpus:
                 init_kwargs["num_cpus"] = self._num_cpus
-            if self._runtime_env:
-                init_kwargs["runtime_env"] = self._runtime_env
+            if self._resolved_runtime_env:
+                init_kwargs["runtime_env"] = self._resolved_runtime_env
 
             ray.init(**init_kwargs)
 
         self._initialized = True
+
+        # Create logger actor if logger was set before init
+        if self._logger is not None and self._logger_actor is None:
+            self._create_logger_actor()
 
     def submit(
         self,
@@ -134,11 +205,16 @@ class RayExecutor(Executor):
         """Submit a task for Ray execution."""
         self._ensure_initialized()
 
-        ray_future = _ray_execute_task.remote(
+        opts: dict[str, Any] = {}
+        if self._resolved_runtime_env:
+            opts["runtime_env"] = self._resolved_runtime_env
+        task_fn = _ray_execute_task.options(**opts) if opts else _ray_execute_task
+        ray_future = task_fn.remote(
             expr.func,
             resolved_args,
             resolved_kwargs,
             self._capture,
+            ray_actor_name=self._logger_actor_name,
         )
 
         # Wrap in a standard Future
@@ -201,11 +277,20 @@ class RayExecutor(Executor):
         self._ensure_initialized()
 
         try:
-            ray_future = _ray_execute_task.remote(
+            opts: dict[str, Any] = {}
+            if self._resolved_runtime_env:
+                opts["runtime_env"] = self._resolved_runtime_env
+            task_fn = (
+                _ray_execute_task.options(**opts)
+                if opts
+                else _ray_execute_task
+            )
+            ray_future = task_fn.remote(
                 expr.func,
                 resolved_args,
                 resolved_kwargs,
                 self._capture,
+                ray_actor_name=self._logger_actor_name,
             )
             (
                 success, result, stdout, stderr,
@@ -239,9 +324,15 @@ class RayExecutor(Executor):
             )
 
     def shutdown(self, wait: bool = True) -> None:
-        """Shutdown Ray (if we initialized it)."""
-        # Don't shutdown Ray as other code might be using it
-        pass
+        """Shutdown the logger relay actor."""
+        if self._logger_actor is not None:
+            try:
+                ray.get(self._logger_actor.shutdown.remote())
+                ray.kill(self._logger_actor)
+            except Exception:
+                pass
+            self._logger_actor = None
+            self._logger_actor_name = None
 
     def __repr__(self) -> str:
         addr = self._address or "local"

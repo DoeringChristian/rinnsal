@@ -97,11 +97,24 @@ class LoggerProxy:
             immediately with a ``RNNSL`` magic prefix (for real-time
             relay over SSH stderr).  If *None*, events are collected
             into an internal buffer retrievable via ``get_buffer()``.
+        ray_actor_name: If provided, events are sent to a named Ray
+            actor for real-time relay.  Falls back to buffer mode if
+            the actor is unavailable.
     """
 
-    def __init__(self, stream: BinaryIO | None = None) -> None:
+    def __init__(
+        self,
+        stream: BinaryIO | None = None,
+        ray_actor_name: str | None = None,
+    ) -> None:
         self._stream = stream
-        self._buffer = io.BytesIO() if stream is None else None
+        self._ray_actor_name = ray_actor_name
+        self._ray_actor: Any = None  # lazily resolved
+        self._buffer = (
+            io.BytesIO()
+            if stream is None and ray_actor_name is None
+            else None
+        )
         self._iteration = 0
 
     # ------------------------------------------------------------------
@@ -259,7 +272,12 @@ class LoggerProxy:
             self._stream.flush()
 
     def get_buffer(self) -> bytes:
-        """Return collected event bytes (buffer mode only)."""
+        """Return collected event bytes.
+
+        In buffer mode this is the primary output.  In ray-actor mode
+        this contains only fallback events (when the actor was
+        unreachable).
+        """
         if self._buffer is None:
             return b""
         return self._buffer.getvalue()
@@ -277,6 +295,21 @@ class LoggerProxy:
     def _emit(self, event: Any) -> None:
         """Serialize and write one Event record."""
         data = event.SerializeToString()
+
+        # Ray actor mode — send event directly to the relay actor
+        if self._ray_actor_name is not None:
+            try:
+                if self._ray_actor is None:
+                    import ray
+
+                    self._ray_actor = ray.get_actor(self._ray_actor_name)
+                self._ray_actor.log_event.remote(data)
+                return
+            except Exception:
+                # Actor unavailable — fall back to buffer
+                if self._buffer is None:
+                    self._buffer = io.BytesIO()
+
         record = struct.pack("<I", len(data)) + data
 
         if self._stream is not None:
@@ -284,7 +317,7 @@ class LoggerProxy:
             # distinguish event records from plain-text stderr.
             self._stream.write(STREAM_MAGIC + record)
             self._stream.flush()
-        else:
+        elif self._buffer is not None:
             self._buffer.write(record)
 
 

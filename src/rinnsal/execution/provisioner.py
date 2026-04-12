@@ -5,7 +5,7 @@ from __future__ import annotations
 import shutil
 import sys
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 _LOCAL_PYTHON_VERSION = f"{sys.version_info.major}.{sys.version_info.minor}"
 
@@ -171,6 +171,69 @@ def _detect_provisioner(search_dir: str | Path | None = None) -> Provisioner:
         return UvProvisioner()
 
     return PipProvisioner()
+
+
+def build_ray_runtime_env(
+    provisioner: Provisioner | None = None,
+    extra_packages: list[str] | None = None,
+    user_runtime_env: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a Ray ``runtime_env`` dict from a provisioner.
+
+    Auto-detects the provisioner if none is given.  Merges the result
+    with *user_runtime_env* (user values take precedence for scalars;
+    list values like ``pip`` are concatenated).
+    """
+    if provisioner is None:
+        provisioner = _detect_provisioner()
+
+    # Unwrap AutoProvisioner
+    inner = getattr(provisioner, "inner", provisioner)
+
+    env: dict[str, Any] = {}
+
+    # working_dir — ship project source to workers
+    project_dir = getattr(inner, "_project_dir", None) or getattr(
+        inner, "project_dir", None
+    )
+    if project_dir is not None:
+        env["working_dir"] = str(project_dir)
+
+    # pip — always include cloudpickle; add provisioner extras
+    pip_packages: list[str] = ["cloudpickle"]
+    prov_extras = getattr(inner, "_extra_packages", None)
+    if prov_extras:
+        pip_packages.extend(prov_extras)
+    if extra_packages:
+        pip_packages.extend(extra_packages)
+
+    # Deduplicate while preserving order
+    seen: set[str] = set()
+    deduped: list[str] = []
+    for p in pip_packages:
+        if p not in seen:
+            seen.add(p)
+            deduped.append(p)
+    env["pip"] = deduped
+
+    # Merge with user-provided runtime_env
+    if user_runtime_env:
+        for key, val in user_runtime_env.items():
+            if key == "pip" and isinstance(val, list):
+                # Append user pip packages, deduplicate
+                for p in val:
+                    if p not in seen:
+                        seen.add(p)
+                        env["pip"].append(p)
+            elif key == "env_vars" and isinstance(val, dict):
+                env.setdefault("env_vars", {}).update(val)
+            elif key == "py_modules" and isinstance(val, list):
+                env.setdefault("py_modules", []).extend(val)
+            else:
+                # Scalar keys: user wins
+                env[key] = val
+
+    return env
 
 
 class AutoProvisioner:

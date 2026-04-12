@@ -719,8 +719,11 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
 
   const setSlotRef = (idx: number, el: HTMLDivElement | null) => { if (el) slotRefsRef.current.set(idx, el); else slotRefsRef.current.delete(idx); };
 
-  const content = (
-    <div ref={containerRefCallback}>
+  // Render content for a given mode. "inline" and "overlay" get
+  // different React keys so their chart instances (and zoom state)
+  // are fully independent.
+  const renderContent = (mode: "inline" | "overlay") => (
+    <div ref={mode === "inline" ? containerRefCallback : undefined} key={mode}>
       {!group.collapsed && linkedIterations.length > 1 && (
         <div className="flex items-center gap-2 mb-3">
           <span className="text-xs text-gray-500 shrink-0">it: {globalIt}</span>
@@ -1151,7 +1154,7 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
               <h3 className="text-sm font-semibold text-white">{group.name}</h3>
               <button onClick={() => setOverlay(false)} className="px-2 py-1 text-xs bg-gray-700 text-white rounded hover:bg-gray-600">Exit fullscreen</button>
             </div>
-            {content}
+            {renderContent("overlay")}
           </div>
         </div>
       </div>
@@ -1179,7 +1182,7 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
           <button onClick={onDelete} title="Delete comparison" className="px-1.5 py-0.5 text-xs text-gray-400 hover:text-red-500 rounded hover:bg-gray-200 transition-colors">{"\u00D7"}</button>
         </div>
       </div>
-      {content}
+      {renderContent("inline")}
     </div>
   );
 }
