@@ -34,7 +34,7 @@ def make_noise(it: int, size: int = 64) -> np.ndarray:
 
 
 def main():
-    with Logger(".rinnsal/examples/image_logging") as logger:
+    with Logger() as logger:
         for i in range(20):
             logger.set_iteration(i)
 
