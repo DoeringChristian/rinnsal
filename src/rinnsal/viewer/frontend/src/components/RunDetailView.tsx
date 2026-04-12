@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, useLayoutEffect } from "react";
 import ScalarChart from "./ScalarChart";
 import TextLog from "./TextLog";
 import FigureViewer from "./FigureViewer";
@@ -67,6 +67,17 @@ export default function RunDetailView({
   const [cards, setCards] = useState<Map<string, CardData>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
   const loadedRef = useRef<Set<string>>(new Set());
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  // Persist scroll per run+tab across F5 reloads
+  const scrollKey = `rinnsal-detail-scroll:${runPath}`;
+  const [initScroll] = useState<Record<string, number>>(() => {
+    try {
+      const raw = sessionStorage.getItem(scrollKey);
+      return raw ? JSON.parse(raw) : {};
+    } catch { return {}; }
+  });
+  const scrollRef = useRef<Record<string, number>>(initScroll);
 
   // The text tab needs to be loaded for console/system too
   const textNeededTabs: DetailTab[] = ["text", "console", "system"];
@@ -120,9 +131,41 @@ export default function RunDetailView({
     loadTab(activeTab);
   }, [activeTab, loadTab]);
 
+  // Track scroll per sub-tab and persist for F5 reload
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    const onScroll = () => {
+      scrollRef.current[activeTab] = el.scrollTop;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    const persistScroll = () => {
+      scrollRef.current[activeTab] = el.scrollTop;
+      try { sessionStorage.setItem(scrollKey, JSON.stringify(scrollRef.current)); } catch {}
+    };
+    window.addEventListener("beforeunload", persistScroll);
+    return () => {
+      el.removeEventListener("scroll", onScroll);
+      window.removeEventListener("beforeunload", persistScroll);
+      // Also save when unmounting (tab switch)
+      try { sessionStorage.setItem(scrollKey, JSON.stringify(scrollRef.current)); } catch {}
+    };
+  }, [activeTab, scrollKey]);
+
+  // Restore scroll after data loads or tab switch
+  useLayoutEffect(() => {
+    if (contentRef.current) {
+      contentRef.current.scrollTop = scrollRef.current[activeTab] || 0;
+    }
+  });
+
   // Auto-refresh the active tab every 5 seconds for live data
   useEffect(() => {
     const interval = setInterval(() => {
+      // Save scroll before refresh
+      if (contentRef.current) {
+        scrollRef.current[activeTab] = contentRef.current.scrollTop;
+      }
       loadTab(activeTab, true);
     }, 5000);
     return () => clearInterval(interval);
@@ -249,8 +292,8 @@ export default function RunDetailView({
         </div>
       </div>
 
-      {/* Content */}
-      <div className="flex-1 overflow-auto p-4">
+      {/* Content — preserve scroll position across data refreshes */}
+      <div ref={contentRef} className="flex-1 overflow-auto p-4">
         {isLoading && scalars.size === 0 && text.size === 0 ? (
           <div className="text-center text-gray-500 mt-8">Loading...</div>
         ) : (
