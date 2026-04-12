@@ -5,13 +5,14 @@ import FlowSidebar from "./components/FlowSidebar";
 import FlowGraph from "./components/FlowGraph";
 import TasksView from "./components/TasksView";
 import RunDetailView from "./components/RunDetailView";
+import FilterSidebar from "./components/FilterSidebar";
 import { fetchConfig } from "./lib/api";
 
 // ─── Types ──────────────────────────────────────────────────────
 
-type SidebarTab = "flows" | "tasks" | "runs" | "compare";
+type SidebarTab = "flows" | "tasks" | "runs" | "filter" | "compare";
 
-interface SelectedRun {
+interface OpenRun {
   path: string;
   label: string;
 }
@@ -24,7 +25,8 @@ function loadPersistedState(): {
   rootDir?: string;
   sidebarTab?: SidebarTab;
   selectedFlow?: string | null;
-  selectedRun?: SelectedRun | null;
+  openRuns?: OpenRun[];
+  activeRunIdx?: number;
 } {
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY);
@@ -39,7 +41,8 @@ function persistState(state: {
   rootDir: string;
   sidebarTab: SidebarTab;
   selectedFlow: string | null;
-  selectedRun: SelectedRun | null;
+  openRuns: OpenRun[];
+  activeRunIdx: number;
 }) {
   try {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -54,6 +57,7 @@ const NAV_ITEMS: { key: SidebarTab; label: string; icon: string }[] = [
   { key: "flows", label: "Flows", icon: "\u2B21" },
   { key: "tasks", label: "Tasks", icon: "\u25A3" },
   { key: "runs", label: "Runs", icon: "\u25F6" },
+  { key: "filter", label: "Filter", icon: "\u2AF6" },
   { key: "compare", label: "Compare", icon: "\u2194" },
 ];
 
@@ -68,15 +72,18 @@ export default function App() {
   const [selectedFlow, setSelectedFlow] = useState<string | null>(
     persisted.selectedFlow ?? null
   );
-  const [selectedRun, setSelectedRun] = useState<SelectedRun | null>(
-    persisted.selectedRun ?? null
+  // Open run tabs — multiple runs can be open at once
+  const [openRuns, setOpenRuns] = useState<OpenRun[]>(
+    persisted.openRuns || []
+  );
+  // -1 = no run tab active (show section overview), >=0 = index into openRuns
+  const [activeRunIdx, setActiveRunIdx] = useState<number>(
+    persisted.activeRunIdx ?? -1
   );
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // Compare groups (persisted separately)
   const { groups, setGroups, addToGroup } = useCompareGroups();
 
-  // Auto-load config on mount
   useEffect(() => {
     if (persisted.rootDir) return;
     fetchConfig()
@@ -86,30 +93,63 @@ export default function App() {
       .catch((e) => console.error("Failed to fetch config:", e));
   }, []);
 
-  // Persist state
   useEffect(() => {
-    persistState({ rootDir, sidebarTab, selectedFlow, selectedRun });
-  }, [rootDir, sidebarTab, selectedFlow, selectedRun]);
+    persistState({
+      rootDir,
+      sidebarTab,
+      selectedFlow,
+      openRuns,
+      activeRunIdx,
+    });
+  }, [rootDir, sidebarTab, selectedFlow, openRuns, activeRunIdx]);
 
   const handleRefresh = useCallback(() => {
     setRefreshKey((k) => k + 1);
   }, []);
 
-  const handleSelectRun = useCallback(
+  // Open a run tab (or focus it if already open)
+  const handleOpenRun = useCallback(
     (runPath: string, label: string) => {
-      setSelectedRun({ path: runPath, label });
+      setOpenRuns((prev) => {
+        const existing = prev.findIndex((r) => r.path === runPath);
+        if (existing >= 0) {
+          setActiveRunIdx(existing);
+          return prev;
+        }
+        const next = [...prev, { path: runPath, label }];
+        setActiveRunIdx(next.length - 1);
+        return next;
+      });
     },
     []
   );
 
-  const handleBackFromDetail = useCallback(() => {
-    setSelectedRun(null);
-  }, []);
+  // Close a run tab
+  const handleCloseRun = useCallback(
+    (idx: number) => {
+      setOpenRuns((prev) => {
+        const next = prev.filter((_, i) => i !== idx);
+        setActiveRunIdx((cur) => {
+          if (next.length === 0) return -1;
+          if (cur === idx) return Math.min(idx, next.length - 1);
+          if (cur > idx) return cur - 1;
+          return cur;
+        });
+        return next;
+      });
+    },
+    []
+  );
 
   const switchSidebarTab = useCallback((tab: SidebarTab) => {
     setSidebarTab(tab);
-    setSelectedRun(null); // clear detail when switching sections
+    setActiveRunIdx(-1); // show section overview
   }, []);
+
+  const activeRun =
+    activeRunIdx >= 0 && activeRunIdx < openRuns.length
+      ? openRuns[activeRunIdx]
+      : null;
 
   // ─── Render ─────────────────────────────────────────────────
 
@@ -127,15 +167,15 @@ export default function App() {
             key={item.key}
             onClick={() => switchSidebarTab(item.key)}
             title={item.label}
-            className={`w-10 h-10 rounded-lg flex items-center justify-center mb-1 transition-colors text-lg ${
-              sidebarTab === item.key
+            className={`w-10 h-10 rounded-lg flex items-center justify-center mb-1 transition-colors text-lg relative ${
+              sidebarTab === item.key && activeRunIdx < 0
                 ? "bg-blue-600 text-white"
                 : "text-gray-400 hover:text-white hover:bg-gray-700"
             }`}
           >
             {item.icon}
             {item.key === "compare" && groups.length > 0 && (
-              <span className="absolute ml-5 -mt-3 text-xs bg-blue-500 text-white px-1 rounded-full">
+              <span className="absolute -top-1 -right-1 text-xs bg-blue-500 text-white w-4 h-4 rounded-full flex items-center justify-center">
                 {groups.length}
               </span>
             )}
@@ -165,7 +205,7 @@ export default function App() {
         </button>
       </nav>
 
-      {/* Sidebar panel — shows context for the active nav item */}
+      {/* Sidebar panel */}
       {sidebarTab !== "compare" && (
         <aside
           className="bg-white border-r border-gray-200 flex flex-col overflow-hidden"
@@ -177,7 +217,6 @@ export default function App() {
             overflow: "auto",
           }}
         >
-          {/* Root dir input */}
           <div className="p-3 border-b border-gray-200">
             <input
               type="text"
@@ -188,14 +227,13 @@ export default function App() {
             />
           </div>
 
-          {/* Sidebar content per tab */}
           <div className="flex-1 overflow-auto p-3">
             {sidebarTab === "flows" && (
               <FlowSidebar
                 rootDir={rootDir}
                 selectedFlow={selectedFlow}
                 onSelectFlow={setSelectedFlow}
-                onSelectRun={handleSelectRun}
+                onSelectRun={handleOpenRun}
                 refreshKey={refreshKey}
               />
             )}
@@ -207,19 +245,22 @@ export default function App() {
             {sidebarTab === "runs" && (
               <RunSelector
                 rootDir={rootDir}
-                selectedRuns={
-                  selectedRun ? [selectedRun.path] : []
-                }
+                selectedRuns={activeRun ? [activeRun.path] : []}
                 onSelectionChange={(paths) => {
                   if (paths.length > 0) {
                     const p = paths[paths.length - 1];
                     const name = p.split("/").pop() || p;
-                    handleSelectRun(p, name);
-                  } else {
-                    setSelectedRun(null);
+                    handleOpenRun(p, name);
                   }
                 }}
                 refreshKey={refreshKey}
+              />
+            )}
+            {sidebarTab === "filter" && (
+              <FilterSidebar
+                rootDir={rootDir}
+                refreshKey={refreshKey}
+                onSelectRun={handleOpenRun}
               />
             )}
           </div>
@@ -228,17 +269,73 @@ export default function App() {
 
       {/* Main content area */}
       <main className="flex-1 flex flex-col overflow-hidden">
-        {selectedRun ? (
-          /* ─── Detail view for a selected run ─── */
+        {/* Run tabs bar — shown when there are open runs */}
+        {openRuns.length > 0 && (
+          <div className="bg-white border-b border-gray-200 px-2 flex items-center shrink-0 overflow-x-auto">
+            {/* Section tab (back to overview) */}
+            <button
+              onClick={() => setActiveRunIdx(-1)}
+              className={`py-2 px-3 text-xs font-medium border-b-2 transition-colors shrink-0 capitalize ${
+                activeRunIdx < 0
+                  ? "border-blue-500 text-blue-600"
+                  : "border-transparent text-gray-500 hover:text-gray-700"
+              }`}
+            >
+              {sidebarTab}
+            </button>
+            <div className="w-px h-5 bg-gray-200 mx-1" />
+            {/* Open run tabs */}
+            {openRuns.map((run, idx) => {
+              const shortLabel =
+                run.label.length > 30
+                  ? "..." + run.label.slice(-27)
+                  : run.label;
+              return (
+                <div
+                  key={run.path}
+                  className={`flex items-center border-b-2 transition-colors shrink-0 ${
+                    activeRunIdx === idx
+                      ? "border-blue-500"
+                      : "border-transparent"
+                  }`}
+                >
+                  <button
+                    onClick={() => setActiveRunIdx(idx)}
+                    className={`py-2 px-2 text-xs font-medium transition-colors ${
+                      activeRunIdx === idx
+                        ? "text-blue-600"
+                        : "text-gray-500 hover:text-gray-700"
+                    }`}
+                    title={run.label}
+                  >
+                    {shortLabel}
+                  </button>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleCloseRun(idx);
+                    }}
+                    className="text-gray-400 hover:text-red-500 text-xs px-1"
+                    title="Close"
+                  >
+                    {"\u00D7"}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Content */}
+        {activeRun ? (
           <RunDetailView
-            runPath={selectedRun.path}
-            runLabel={selectedRun.label}
-            onBack={handleBackFromDetail}
+            runPath={activeRun.path}
+            runLabel={activeRun.label}
+            onBack={() => setActiveRunIdx(-1)}
             compareGroups={groups}
             onAddToCompare={addToGroup}
           />
         ) : (
-          /* ─── Section overview (no run selected) ─── */
           <div className="flex-1 overflow-auto relative">
             {sidebarTab === "flows" && (
               <FlowGraph
@@ -247,7 +344,7 @@ export default function App() {
                 refreshKey={refreshKey}
                 onOpenRun={(runPath) => {
                   const name = runPath.split("/").pop() || runPath;
-                  handleSelectRun(runPath, name);
+                  handleOpenRun(runPath, name);
                 }}
               />
             )}
@@ -256,13 +353,18 @@ export default function App() {
                 <TasksView
                   rootDir={rootDir}
                   refreshKey={refreshKey}
-                  onSelectRun={handleSelectRun}
+                  onSelectRun={handleOpenRun}
                 />
               </div>
             )}
             {sidebarTab === "runs" && (
               <div className="text-center text-gray-500 mt-8">
                 Select a run from the sidebar to view its data.
+              </div>
+            )}
+            {sidebarTab === "filter" && (
+              <div className="text-center text-gray-500 mt-8">
+                Use the filter sidebar to search runs by parameters.
               </div>
             )}
             {sidebarTab === "compare" && (

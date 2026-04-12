@@ -2,7 +2,7 @@ import { useMemo, useState, useCallback, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import uPlot from "uplot";
 import "uplot/dist/uPlot.min.css";
-import { figureImageUrl, imageUrl, fetchScalars, fetchText } from "../lib/api";
+import { figureImageUrl, imageUrl, fetchScalars, fetchText, fetchFiguresMeta, fetchImagesMeta } from "../lib/api";
 import { getRunColor } from "./RunSelector";
 
 // ─── Types (exported for use by other components) ────────────────
@@ -95,10 +95,10 @@ function SlotContent({ slot, it }: { slot: CompareSlot; it: number }) {
   const tick = useRefreshTick();
 
   if (slot.type === "figure") {
-    return <img src={figureImageUrl(slot.run, slot.tag, it) + `&_v=${tick}`} alt={`${runName} / ${slot.tag} @ ${it}`} className="w-full h-auto rounded object-contain" loading="lazy" />;
+    return <img key={`fig-${tick}`} src={figureImageUrl(slot.run, slot.tag, it) + `&_v=${tick}`} alt={`${runName} / ${slot.tag} @ ${it}`} className="w-full h-auto rounded object-contain" />;
   }
   if (slot.type === "image") {
-    return <img src={imageUrl(slot.run, slot.tag, it) + `&_v=${tick}`} alt={`${runName} / ${slot.tag} @ ${it}`} className="w-full h-auto rounded object-contain" loading="lazy" />;
+    return <img key={`img-${tick}`} src={imageUrl(slot.run, slot.tag, it) + `&_v=${tick}`} alt={`${runName} / ${slot.tag} @ ${it}`} className="w-full h-auto rounded object-contain" />;
   }
   if (slot.type === "scalar") {
     return null; // Rendered in scalar panels
@@ -612,6 +612,72 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
   const [cardDropIdx, setCardDropIdx] = useState<{ idx: number; side: "left" | "right" } | null>(null);
   const [dragPanelPid, setDragPanelPid] = useState<number | null>(null); // set when dragging a whole panel
   const { slots } = group;
+
+  // Periodically refresh iterations for figure/image slots so new
+  // data from live-running tasks appears in the compare view.
+  const refreshTick = useRefreshTick();
+  useEffect(() => {
+    const figureSlots = slots.filter((s) => s.type === "figure");
+    const imageSlots = slots.filter((s) => s.type === "image");
+    if (figureSlots.length === 0 && imageSlots.length === 0) return;
+
+    let cancelled = false;
+
+    const refresh = async () => {
+      const updates: { idx: number; iterations: number[] }[] = [];
+
+      // Fetch figure metadata
+      const figRuns = new Set(figureSlots.map((s) => s.run));
+      for (const run of figRuns) {
+        try {
+          const meta = await fetchFiguresMeta(run);
+          for (let i = 0; i < slots.length; i++) {
+            const s = slots[i];
+            if (s.type === "figure" && s.run === run && meta[s.tag]) {
+              const newIts = meta[s.tag].map((f: { it: number }) => f.it);
+              if (newIts.length !== s.iterations.length) {
+                updates.push({ idx: i, iterations: newIts });
+              }
+            }
+          }
+        } catch { /* ignore */ }
+      }
+
+      // Fetch image metadata
+      const imgRuns = new Set(imageSlots.map((s) => s.run));
+      for (const run of imgRuns) {
+        try {
+          const meta = await fetchImagesMeta(run);
+          for (let i = 0; i < slots.length; i++) {
+            const s = slots[i];
+            if (s.type === "image" && s.run === run && meta[s.tag]) {
+              const newIts = meta[s.tag].map((img: { it: number }) => img.it);
+              if (newIts.length !== s.iterations.length) {
+                updates.push({ idx: i, iterations: newIts });
+              }
+            }
+          }
+        } catch { /* ignore */ }
+      }
+
+      if (!cancelled && updates.length > 0) {
+        const newSlots = [...slots];
+        for (const u of updates) {
+          const s = newSlots[u.idx];
+          const wasAtLatest = s.localIt === s.iterations[s.iterations.length - 1];
+          newSlots[u.idx] = {
+            ...s,
+            iterations: u.iterations,
+            localIt: wasAtLatest ? u.iterations[u.iterations.length - 1] : s.localIt,
+          };
+        }
+        onUpdate({ ...group, slots: newSlots });
+      }
+    };
+
+    refresh();
+    return () => { cancelled = true; };
+  }, [refreshTick]);
 
   const commitName = () => {
     const trimmed = editName.trim();
