@@ -13,6 +13,91 @@ from rinnsal.execution.inline import InlineExecutor
 
 if TYPE_CHECKING:
     from rinnsal.logger import Logger
+
+
+def _summarize_value(v: Any, max_len: int = 200) -> Any:
+    """Summarize a single value for parameter recording.
+
+    - Scalars (int, float, bool, str, None): kept as-is
+    - Dicts / Config objects: recursively summarized (full layout)
+    - Lists/tuples: summarized with length + first few elements
+    - Other objects: type name + repr truncated
+    """
+    if v is None or isinstance(v, (bool, int, float)):
+        return v
+    if isinstance(v, str):
+        return v if len(v) <= max_len else v[:max_len] + "..."
+    if isinstance(v, dict):
+        return {str(k): _summarize_value(val) for k, val in v.items()}
+    # Handle dataclasses and attrs
+    if hasattr(v, "__dataclass_fields__"):
+        return {
+            k: _summarize_value(getattr(v, k))
+            for k in v.__dataclass_fields__
+        }
+    if hasattr(v, "__attrs_attrs__"):
+        return {
+            a.name: _summarize_value(getattr(v, a.name))
+            for a in v.__attrs_attrs__
+        }
+    # Config-like objects with a dict representation
+    if hasattr(v, "to_dict"):
+        try:
+            return _summarize_value(v.to_dict())
+        except Exception:
+            pass
+    if isinstance(v, (list, tuple)):
+        t = type(v).__name__
+        n = len(v)
+        if n <= 5:
+            return [_summarize_value(x) for x in v]
+        preview = [_summarize_value(x) for x in v[:3]]
+        return {"_type": t, "_len": n, "_preview": preview}
+    # Numpy arrays, tensors, etc.
+    t = type(v).__name__
+    shape = getattr(v, "shape", None)
+    dtype = getattr(v, "dtype", None)
+    if shape is not None:
+        info: dict[str, Any] = {"_type": t, "_shape": list(shape)}
+        if dtype is not None:
+            info["_dtype"] = str(dtype)
+        return info
+    # Fallback
+    r = repr(v)
+    if len(r) > max_len:
+        r = r[:max_len] + "..."
+    return {"_type": t, "_repr": r}
+
+
+def _summarize_params(
+    expr: TaskExpression,
+    resolved_args: tuple[Any, ...],
+    resolved_kwargs: dict[str, Any],
+) -> str:
+    """Build a JSON string summarizing the task's parameters."""
+    import inspect
+    import json
+
+    params: dict[str, Any] = {}
+
+    # Try to match positional args to parameter names
+    try:
+        sig = inspect.signature(expr.func)
+        param_names = list(sig.parameters.keys())
+        for i, val in enumerate(resolved_args):
+            name = param_names[i] if i < len(param_names) else f"arg{i}"
+            params[name] = _summarize_value(val)
+    except (ValueError, TypeError):
+        for i, val in enumerate(resolved_args):
+            params[f"arg{i}"] = _summarize_value(val)
+
+    for k, v in resolved_kwargs.items():
+        params[k] = _summarize_value(v)
+
+    try:
+        return json.dumps(params, default=str, ensure_ascii=False)
+    except Exception:
+        return "{}"
     from rinnsal.persistence.database import Database
 
 
@@ -132,6 +217,11 @@ class ExecutionEngine:
                 task_dir.mkdir(parents=True, exist_ok=True)
                 checkpoint_path = task_dir / "checkpoint.dat"
 
+            # Summarize task parameters for the viewer
+            _task_params = _summarize_params(
+                expr, resolved_args, resolved_kwargs
+            )
+
             # Emit "running" status before execution so the viewer
             # shows the task immediately, not only after it completes.
             if ctx_logger is not None and expr.task_name:
@@ -139,6 +229,7 @@ class ExecutionEngine:
                     task_name=expr.task_name,
                     task_hash=expr.hash,
                     status="running",
+                    params=_task_params,
                 )
                 ctx_logger.flush()
 
@@ -157,6 +248,7 @@ class ExecutionEngine:
                         status="failed",
                         duration=(datetime.now() - _task_t0).total_seconds(),
                         error=str(_exc),
+                        params=_task_params,
                     )
                 raise
             _task_elapsed = (datetime.now() - _task_t0).total_seconds()
@@ -167,6 +259,7 @@ class ExecutionEngine:
                     task_hash=expr.hash,
                     status="success",
                     duration=_task_elapsed,
+                    params=_task_params,
                 )
 
             # Store the result

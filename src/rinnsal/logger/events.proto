@@ -67,6 +67,7 @@ message TaskNode {
   string status = 3;         // "success" | "failed" | "cached" | "running"
   double duration = 4;       // elapsed seconds
   string error = 5;          // error message (when failed)
+  string params = 6;         // JSON-encoded task parameters
 }
 
 message TaskEdge {

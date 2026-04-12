@@ -250,6 +250,7 @@ class LoggerProxy:
         status: str,
         duration: float = 0.0,
         error: str = "",
+        params: str = "",
         it: int | None = None,
     ) -> None:
         from rinnsal.logger.events_pb2 import Event, TaskNode
@@ -261,6 +262,7 @@ class LoggerProxy:
             TaskNode(
                 task_name=task_name, task_hash=task_hash,
                 status=status, duration=duration, error=error,
+                params=params,
             )
         )
         self._emit(event)

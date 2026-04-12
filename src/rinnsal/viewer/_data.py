@@ -88,8 +88,8 @@ class RunCache:
         self.text: dict[str, list[tuple[int, str]]] = {}
         self.figures: dict[str, list[tuple[int, bytes, bytes, bool]]] = {}
         self.images: dict[str, list[tuple[int, bytes, int, int]]] = {}  # tag → [(it, png_bytes, w, h)]
-        # List of (task_name, task_hash, status, duration, error, timestamp)
-        self.task_nodes: list[tuple[str, str, str, float, str, float]] = []
+        # List of (task_name, task_hash, status, duration, error, timestamp, params)
+        self.task_nodes: list[tuple[str, str, str, float, str, float, str]] = []
         # List of (from_task, to_task)
         self.task_edges: list[tuple[str, str]] = []
         self.file_mtime: float = 0.0
@@ -168,6 +168,7 @@ class RunCache:
                         tn.duration,
                         tn.error,
                         event.timestamp,
+                        getattr(tn, "params", ""),
                     )
                 )
 

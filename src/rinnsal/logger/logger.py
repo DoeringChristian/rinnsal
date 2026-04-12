@@ -253,6 +253,7 @@ class Logger:
         status: str,
         duration: float = 0.0,
         error: str = "",
+        params: str = "",
         it: int | None = None,
     ) -> None:
         """Log a task node event (DAG structure + last run info).
@@ -269,7 +270,7 @@ class Logger:
             it = self._iteration
         ts = self._get_timestamp()
         self._queue.put(
-            ("task_node", (task_name, task_hash, status, duration, error, it, ts))
+            ("task_node", (task_name, task_hash, status, duration, error, params, it, ts))
         )
 
     def add_task_edge(
@@ -419,6 +420,7 @@ class Logger:
         status: str,
         duration: float,
         error: str,
+        params: str,
         it: int,
         ts: float,
     ) -> None:
@@ -434,6 +436,7 @@ class Logger:
                 status=status,
                 duration=duration,
                 error=error,
+                params=params,
             )
         )
         self._event_writer.write(event)

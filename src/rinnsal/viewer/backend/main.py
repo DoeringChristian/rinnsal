@@ -213,7 +213,7 @@ def list_flows(
             # the same run (engine.evaluate is called once per
             # top-level task, so cached repeats are noise here).
             priority = {"cached": 0, "running": 1, "success": 2, "failed": 2}
-            run_nodes: dict[str, tuple[str, str, float, str, float]] = {}
+            run_nodes: dict[str, tuple[str, str, float, str, float, str]] = {}
             for (
                 task_name,
                 task_hash,
@@ -221,6 +221,7 @@ def list_flows(
                 duration,
                 error,
                 ts,
+                params,
             ) in cache.task_nodes:
                 if not task_name:
                     continue
@@ -228,10 +229,10 @@ def list_flows(
                 if existing is not None:
                     if priority.get(status, 0) < priority.get(existing[1], 0):
                         continue
-                run_nodes[task_name] = (task_hash, status, duration, error, ts)
+                run_nodes[task_name] = (task_hash, status, duration, error, ts, params)
 
             for task_name, data in run_nodes.items():
-                task_hash, status, duration, error, ts = data
+                task_hash, status, duration, error, ts, params = data
                 node_run_counts[task_name] = (
                     node_run_counts.get(task_name, 0) + 1
                 )
@@ -247,6 +248,7 @@ def list_flows(
                         "duration": duration,
                         "error": error,
                         "timestamp": ts,
+                        "params": params,
                     }
 
             for from_t, to_t in cache.task_edges:
@@ -295,7 +297,7 @@ def task_history(
         # Find the "best" TaskNode matching task_name in this run —
         # terminal states (success/failed) win over "cached", which only
         # marks a repeated reference within the same run.
-        match: tuple[str, str, float, str, float] | None = None
+        match: tuple[str, str, float, str, float, str] | None = None
         for (
             name,
             task_hash,
@@ -303,6 +305,7 @@ def task_history(
             duration,
             error,
             ts,
+            params,
         ) in cache.task_nodes:
             if name != task_name:
                 continue
@@ -310,10 +313,10 @@ def task_history(
                 match is None
                 or priority.get(status, 0) >= priority.get(match[1], 0)
             ):
-                match = (task_hash, status, duration, error, ts)
+                match = (task_hash, status, duration, error, ts, params)
         if match is None:
             continue
-        task_hash, status, duration, error, ts = match
+        task_hash, status, duration, error, ts, params = match
         history.append(
             {
                 "run_id": run_dir.name,
@@ -323,6 +326,7 @@ def task_history(
                 "timestamp": ts,
                 "error": error,
                 "task_hash": task_hash,
+                "params": params,
             }
         )
 

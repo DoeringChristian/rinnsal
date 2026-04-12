@@ -92,6 +92,7 @@ export interface FlowNode {
   error: string;
   timestamp: number;
   run_count: number;
+  params?: string;
 }
 
 /** Dependency edge between two task names. */
@@ -125,6 +126,7 @@ export interface TaskHistoryEntry {
   timestamp: number;
   error: string;
   task_hash: string;
+  params?: string;
 }
 
 export async function fetchTaskHistory(

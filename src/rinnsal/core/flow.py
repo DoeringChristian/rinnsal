@@ -187,6 +187,55 @@ class FlowResult:
         engine.executor.set_logger(logger)
         logger.add_text("flow/info", f"Flow: {self._flow_name}")
 
+        # Log system information for this run
+        import platform
+        import socket
+
+        sysinfo_lines = [
+            f"hostname: {socket.gethostname()}",
+            f"platform: {platform.platform()}",
+            f"python: {platform.python_version()}",
+            f"processor: {platform.processor() or 'unknown'}",
+            f"executor: {engine.executor!r}",
+        ]
+        try:
+            import os
+            sysinfo_lines.append(f"cpu_count: {os.cpu_count()}")
+            sysinfo_lines.append(f"pid: {os.getpid()}")
+            sysinfo_lines.append(f"cwd: {os.getcwd()}")
+        except Exception:
+            pass
+        try:
+            import shutil
+            total, used, free = shutil.disk_usage("/")
+            sysinfo_lines.append(
+                f"disk: {free // (1024**3)}GB free / {total // (1024**3)}GB total"
+            )
+        except Exception:
+            pass
+        try:
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        mem_kb = int(line.split()[1])
+                        sysinfo_lines.append(f"memory: {mem_kb // (1024**2)}GB")
+                        break
+        except Exception:
+            pass
+        try:
+            import subprocess as _sp
+            gpu_out = _sp.run(
+                ["nvidia-smi", "--query-gpu=name,memory.total",
+                 "--format=csv,noheader"],
+                capture_output=True, text=True, timeout=5,
+            )
+            if gpu_out.returncode == 0 and gpu_out.stdout.strip():
+                for i, line in enumerate(gpu_out.stdout.strip().split("\n")):
+                    sysinfo_lines.append(f"gpu{i}: {line.strip()}")
+        except Exception:
+            pass
+        logger.add_text("system/info", "\n".join(sysinfo_lines))
+
         # Determine which tasks to execute vs load from cache
         if resume:
             if database is None:
