@@ -35,10 +35,20 @@ const FLOW_TAGS = ["flow/info", "flow/summary"];
 
 function isSpecialTag(tag: string): boolean {
   if (SYSTEM_TAGS.includes(tag) || FLOW_TAGS.includes(tag)) return true;
+  // Match both "stdout"/"stderr" and "taskname/stdout"/"taskname/stderr"
+  if (tag === "stdout" || tag === "stderr") return true;
   for (const suffix of CONSOLE_TAG_SUFFIXES) {
     if (tag.endsWith(suffix)) return true;
   }
   if (tag.match(/^task\/.*\/status$/)) return true;
+  return false;
+}
+
+function isConsoleTag(tag: string): boolean {
+  if (tag === "stdout" || tag === "stderr") return true;
+  for (const suffix of CONSOLE_TAG_SUFFIXES) {
+    if (tag.endsWith(suffix)) return true;
+  }
   return false;
 }
 
@@ -144,10 +154,10 @@ export default function RunDetailView({
     // Console: stdout/stderr grouped by task
     const consoleMap = new Map<string, { stdout: { it: number; value: string }[]; stderr: { it: number; value: string }[] }>();
     for (const [tag, entries] of Object.entries(runText)) {
-      if (tag.endsWith("/stdout") || tag.endsWith("/stderr")) {
+      if (isConsoleTag(tag)) {
         const parts = tag.split("/");
         const stream = parts.pop()!; // "stdout" or "stderr"
-        const taskName = parts.join("/");
+        const taskName = parts.join("/") || "(task)";
         if (!consoleMap.has(taskName)) consoleMap.set(taskName, { stdout: [], stderr: [] });
         const bucket = consoleMap.get(taskName)!;
         if (stream === "stdout") bucket.stdout.push(...entries);
@@ -319,7 +329,7 @@ function ConsoleView({ entries }: { entries: ConsoleEntry[] }) {
               {stream}
             </span>
           </div>
-          <pre className="px-4 py-3 text-xs font-mono text-gray-800 bg-gray-900 text-gray-100 overflow-auto max-h-96 whitespace-pre-wrap">
+          <pre className="px-4 py-3 text-xs font-mono bg-white text-gray-800 overflow-auto max-h-96 whitespace-pre-wrap">
             {lines.map((l) => l.value).join("")}
           </pre>
         </div>

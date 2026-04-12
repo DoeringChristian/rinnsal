@@ -21,28 +21,36 @@ if TYPE_CHECKING:
 
 
 class _LoggingStream:
-    """Stream wrapper that captures text and periodically logs it.
+    """Stream wrapper that captures text and logs it in real-time.
 
-    Wraps a StringIO for capture, and when an event_file-backed
-    LoggerProxy is available, also writes chunks to the logger as
-    text events so the viewer can show console output in real-time.
+    When an event_file-backed LoggerProxy is available, writes chunks
+    to the logger as text events so the viewer's Console tab shows
+    output from long-running tasks.
+
+    If *passthrough* is set, also writes to the original stream
+    (used when capture is disabled with ``-s``).
     """
 
     def __init__(
-        self, name: str, proxy: Any, task_name: str = "",
+        self,
+        name: str,
+        proxy: Any,
+        passthrough: Any = None,
     ) -> None:
         import io
         self._buf = io.StringIO()
         self._proxy = proxy
-        self._tag = f"{task_name}/{name}" if task_name else name
+        self._tag = name  # will be prefixed with task name by the engine
         self._pending = ""
+        self._passthrough = passthrough
         self._has_event_file = getattr(proxy, "_event_file_handle", None) is not None
 
     def write(self, s: str) -> int:
         self._buf.write(s)
+        if self._passthrough is not None:
+            self._passthrough.write(s)
         if self._has_event_file:
             self._pending += s
-            # Flush to logger on newlines or when buffer is large
             if "\n" in self._pending or len(self._pending) > 4096:
                 self._proxy.add_text(self._tag, self._pending)
                 self._pending = ""
@@ -50,6 +58,8 @@ class _LoggingStream:
 
     def flush(self) -> None:
         self._buf.flush()
+        if self._passthrough is not None:
+            self._passthrough.flush()
         if self._has_event_file and self._pending:
             self._proxy.add_text(self._tag, self._pending)
             self._pending = ""
@@ -66,6 +76,7 @@ def _worker_execute(
     remapped_pythonpath: str | None = None,
     checkpoint_path: str | None = None,
     event_file: str | None = None,
+    task_name: str = "",
 ) -> tuple[bool, Any, str, str, bytes | None, list[dict] | None, bytes]:
     """Worker function that runs in a subprocess.
 
@@ -102,12 +113,28 @@ def _worker_execute(
     # Use logging streams that write console output to the logger in
     # real-time (when event_file is set), so the viewer's Console tab
     # shows output from long-running tasks.
-    stdout_capture = _LoggingStream("stdout", proxy) if event_file else io.StringIO()
-    stderr_capture = _LoggingStream("stderr", proxy) if event_file else io.StringIO()
+    # When capture is disabled (-s), pass through to real stdout/stderr.
+    if event_file:
+        stdout_tag = f"{task_name}/stdout" if task_name else "stdout"
+        stderr_tag = f"{task_name}/stderr" if task_name else "stderr"
+        stdout_capture = _LoggingStream(
+            stdout_tag, proxy,
+            passthrough=None if capture else sys.stdout,
+        )
+        stderr_capture = _LoggingStream(
+            stderr_tag, proxy,
+            passthrough=None if capture else sys.stderr,
+        )
+    else:
+        stdout_capture = io.StringIO()
+        stderr_capture = io.StringIO()
     if checkpoint_path:
         current._set_checkpoint(Checkpoint(path=Path(checkpoint_path)))
     try:
-        if capture:
+        if capture or event_file:
+            # Always redirect when event_file is set so we can log
+            # console output to the viewer, even with -s (passthrough
+            # sends it to the terminal too).
             with (
                 redirect_stdout(stdout_capture),
                 redirect_stderr(stderr_capture),
@@ -214,6 +241,7 @@ class SubprocessExecutor(Executor):
             remapped_pythonpath,
             self._checkpoint_path,
             self._get_event_file(),
+            expr.task_name or "",
         )
 
     @staticmethod
@@ -372,6 +400,7 @@ class ForkExecutor(Executor):
             remapped_pythonpath,
             self._checkpoint_path,
             event_file,
+            expr.task_name or "",
         )
 
     def submit(
