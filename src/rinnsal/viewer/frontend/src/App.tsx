@@ -18,7 +18,7 @@ function loadPersistedState(): {
   selectedRuns?: string[];
   activeTab?: Tab;
   selectedFlow?: string | null;
-  scrollTop?: number;
+  scrollTops?: Record<string, number>;
 } {
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY);
@@ -32,7 +32,7 @@ function persistState(state: {
   selectedRuns: string[];
   activeTab: Tab;
   selectedFlow: string | null;
-  scrollTop: number;
+  scrollTops: Record<string, number>;
 }) {
   try {
     sessionStorage.setItem(STORAGE_KEY, JSON.stringify(state));
@@ -47,7 +47,7 @@ export default function App() {
   const [selectedFlow, setSelectedFlow] = useState<string | null>(persisted.selectedFlow ?? null);
   const [refreshKey, setRefreshKey] = useState(0);
   const contentRef = useRef<HTMLDivElement>(null);
-  const scrollTopRef = useRef(persisted.scrollTop || 0);
+  const scrollTopsRef = useRef<Record<string, number>>(persisted.scrollTops || {});
 
   const { scalars, text, figures, images, cards, isLoading, refresh: refreshData } =
     useEvents(selectedRuns, activeTab);
@@ -62,31 +62,46 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    persistState({ rootDir, selectedRuns, activeTab, selectedFlow, scrollTop: scrollTopRef.current });
+    persistState({ rootDir, selectedRuns, activeTab, selectedFlow, scrollTops: scrollTopsRef.current });
   }, [rootDir, selectedRuns, activeTab, selectedFlow]);
 
+  // Save scroll position for the current tab on scroll and beforeunload.
   useEffect(() => {
     const el = contentRef.current;
     if (!el) return;
-    const onScroll = () => { scrollTopRef.current = el.scrollTop; };
+    const onScroll = () => { scrollTopsRef.current[activeTab] = el.scrollTop; };
     el.addEventListener("scroll", onScroll, { passive: true });
     const onBeforeUnload = () => {
-      persistState({ rootDir, selectedRuns, activeTab, selectedFlow, scrollTop: scrollTopRef.current });
+      scrollTopsRef.current[activeTab] = el.scrollTop;
+      persistState({ rootDir, selectedRuns, activeTab, selectedFlow, scrollTops: scrollTopsRef.current });
     };
     window.addEventListener("beforeunload", onBeforeUnload);
     return () => { el.removeEventListener("scroll", onScroll); window.removeEventListener("beforeunload", onBeforeUnload); };
   }, [rootDir, selectedRuns, activeTab, selectedFlow]);
 
+  // Restore scroll position when switching tabs or after loading finishes.
   useEffect(() => {
-    if (!isLoading && contentRef.current && scrollTopRef.current > 0) {
-      contentRef.current.scrollTop = scrollTopRef.current;
+    if (!isLoading && contentRef.current) {
+      contentRef.current.scrollTop = scrollTopsRef.current[activeTab] || 0;
     }
-  }, [isLoading]);
+  }, [isLoading, activeTab]);
 
   const handleRefresh = useCallback(() => {
+    // Capture scroll before data re-fetches
+    if (contentRef.current) {
+      scrollTopsRef.current[activeTab] = contentRef.current.scrollTop;
+    }
     setRefreshKey((k) => k + 1);
     refreshData();
-  }, [refreshData]);
+  }, [refreshData, activeTab]);
+
+  const switchTab = useCallback((tab: Tab) => {
+    // Capture current tab's scroll before switching
+    if (contentRef.current) {
+      scrollTopsRef.current[activeTab] = contentRef.current.scrollTop;
+    }
+    setActiveTab(tab);
+  }, [activeTab]);
 
   const tabs: Tab[] = ["scalars", "text", "figures", "images", "cards", "compare", "graph"];
 
@@ -129,7 +144,7 @@ export default function App() {
             {tabs.map((tab) => (
               <button
                 key={tab}
-                onClick={() => setActiveTab(tab)}
+                onClick={() => switchTab(tab)}
                 className={`py-3 px-1 border-b-2 text-sm font-medium capitalize transition-colors ${
                   activeTab === tab
                     ? "border-blue-500 text-blue-600"
@@ -156,12 +171,12 @@ export default function App() {
               refreshKey={refreshKey}
               onOpenRun={(runPath) => {
                 setSelectedRuns([runPath]);
-                setActiveTab("scalars");
+                switchTab("scalars");
               }}
             />
           ) : activeTab !== "compare" && selectedRuns.length === 0 ? (
             <div className="text-center text-gray-500 mt-8">Select runs from the sidebar to view data.</div>
-          ) : isLoading && activeTab !== "compare" ? (
+          ) : isLoading && activeTab !== "compare" && scalars.size === 0 && text.size === 0 && figures.size === 0 && images.size === 0 && cards.size === 0 ? (
             <div className="text-center text-gray-500 mt-8">Loading...</div>
           ) : (
             <>
