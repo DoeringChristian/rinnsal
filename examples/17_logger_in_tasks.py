@@ -10,12 +10,12 @@ Tasks can access this logger via `current.logger` to log:
 - Figures (matplotlib plots)
 - Cards (rich content for the viewer)
 
-IMPORTANT: `current.logger` is only available when using the inline executor.
-With the default subprocess executor, use cards instead (which are automatically
-captured and logged after task completion).
+`current.logger` works with all executors (inline, subprocess, SSH, Ray, Slurm).
+Events are relayed back to the orchestrator automatically — in real-time for
+SSH and Ray, or batched at task completion for subprocess and Slurm.
 
 Usage:
-    python examples/17_logger_in_tasks.py --executor inline
+    python examples/17_logger_in_tasks.py
 
 Then view the logs:
     python -m rinnsal.viewer

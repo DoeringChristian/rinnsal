@@ -100,19 +100,33 @@ class LoggerProxy:
         ray_actor_name: If provided, events are sent to a named Ray
             actor for real-time relay.  Falls back to buffer mode if
             the actor is unavailable.
+        event_file: If provided, events are written as raw
+            length-prefixed records (same format as ``events.pb``)
+            to this file path, flushed after each write.  Used by
+            the persistent SSH executor so the orchestrator can tail
+            the file incrementally.
     """
 
     def __init__(
         self,
         stream: BinaryIO | None = None,
         ray_actor_name: str | None = None,
+        event_file: str | None = None,
     ) -> None:
         self._stream = stream
         self._ray_actor_name = ray_actor_name
         self._ray_actor: Any = None  # lazily resolved
+        self._event_file_handle: BinaryIO | None = None
+        if event_file is not None:
+            from pathlib import Path
+
+            Path(event_file).parent.mkdir(parents=True, exist_ok=True)
+            self._event_file_handle = open(event_file, "ab")
         self._buffer = (
             io.BytesIO()
-            if stream is None and ray_actor_name is None
+            if stream is None
+            and ray_actor_name is None
+            and event_file is None
             else None
         )
         self._iteration = 0
@@ -270,6 +284,8 @@ class LoggerProxy:
     def flush(self) -> None:
         if self._stream is not None:
             self._stream.flush()
+        if self._event_file_handle is not None:
+            self._event_file_handle.flush()
 
     def get_buffer(self) -> bytes:
         """Return collected event bytes.
@@ -312,7 +328,12 @@ class LoggerProxy:
 
         record = struct.pack("<I", len(data)) + data
 
-        if self._stream is not None:
+        if self._event_file_handle is not None:
+            # File mode — raw length-prefixed records, flush immediately
+            # so the orchestrator can tail incrementally.
+            self._event_file_handle.write(record)
+            self._event_file_handle.flush()
+        elif self._stream is not None:
             # Stream mode — prefix with magic so the receiver can
             # distinguish event records from plain-text stderr.
             self._stream.write(STREAM_MAGIC + record)

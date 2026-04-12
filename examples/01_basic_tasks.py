@@ -30,7 +30,5 @@ def pipeline():
 
 
 if __name__ == "__main__":
-    result = pipeline().results()
-    print(f"{result.result=}")
     result = pipeline().run()
     print(f"Result: {result.result}")

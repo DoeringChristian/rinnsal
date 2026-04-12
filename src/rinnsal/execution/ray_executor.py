@@ -169,8 +169,12 @@ class RayExecutor(Executor):
         if self._initialized:
             return
 
-        # Build runtime_env from provisioner + user overrides
-        if self._auto_runtime_env:
+        # Build runtime_env from provisioner + user overrides.
+        # Skip auto-env when connecting to a remote cluster (address is
+        # set) — the remote environment is managed separately.  Also
+        # skip when running under uv/virtualenv isolation, as Ray
+        # rejects pip/uv keys in that context.
+        if self._auto_runtime_env and not self._address:
             from rinnsal.execution.provisioner import build_ray_runtime_env
 
             self._resolved_runtime_env = build_ray_runtime_env(

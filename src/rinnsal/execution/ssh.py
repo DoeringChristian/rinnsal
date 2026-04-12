@@ -500,3 +500,461 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
     def __repr__(self) -> str:
         hosts_str = ", ".join(str(h) for h in self._hosts)
         return f"SSHExecutor(hosts=[{hosts_str}])"
+
+
+# ─── Persistent SSH Executor ─────────────────────────────────────
+
+
+def _make_persistent_worker_script(
+    job_dir: str,
+    checkpoint_path: str | None = None,
+) -> str:
+    """Generate a self-contained worker script for persistent execution."""
+    checkpoint_block = ""
+    if checkpoint_path:
+        checkpoint_block = f"""
+import os
+from pathlib import Path as _Path
+from rinnsal.context import Checkpoint
+current._set_checkpoint(Checkpoint(path=_Path("{checkpoint_path}")))
+"""
+
+    return f'''#!/usr/bin/env python3
+"""Auto-generated rinnsal persistent SSH worker."""
+import os, sys, traceback
+from pathlib import Path
+
+JOB_DIR = Path("{job_dir}")
+SUBMISSION = JOB_DIR / "submission.pkl"
+RESULT = JOB_DIR / "result.pkl"
+EVENTS = JOB_DIR / "events.pb"
+DONE = JOB_DIR / ".done"
+
+# Write PID
+(JOB_DIR / "pid").write_text(str(os.getpid()))
+
+import cloudpickle
+from rinnsal.logger.proxy import LoggerProxy
+from rinnsal.context import Card, current
+
+# Logger writes directly to events.pb (flushed per event)
+proxy = LoggerProxy(event_file=str(EVENTS))
+current._set_logger(proxy)
+current._set_card(Card())
+
+{checkpoint_block}
+
+# Load submission
+with open(SUBMISSION, "rb") as _f:
+    func, args, kwargs = cloudpickle.load(_f)
+
+# Redirect stdout/stderr to log files
+_stdout_log = open(JOB_DIR / "stdout.log", "w")
+_stderr_log = open(JOB_DIR / "stderr.log", "w")
+
+try:
+    from contextlib import redirect_stdout, redirect_stderr
+    with redirect_stdout(_stdout_log), redirect_stderr(_stderr_log):
+        result = func(*args, **kwargs)
+    _card = current._reset()
+    with open(RESULT, "wb") as _f:
+        cloudpickle.dump((
+            "success", result, None,
+            _card.serialize() if _card else None,
+        ), _f)
+except Exception as e:
+    current._reset()
+    tb = traceback.format_exc()
+    with open(RESULT, "wb") as _f:
+        cloudpickle.dump(("error", e, tb, None), _f)
+finally:
+    current._reset_logger()
+    proxy.flush()
+    _stdout_log.close()
+    _stderr_log.close()
+
+# Signal completion
+DONE.touch()
+'''
+
+
+class PersistentSSHExecutor(SSHExecutor):
+    """SSH executor that detaches tasks so they survive disconnects.
+
+    Tasks are submitted via SSH, then run as background processes on
+    the remote machine.  The orchestrator polls for completion and
+    syncs logger events incrementally.  If the SSH connection drops
+    or the local machine restarts, remote tasks keep running and
+    results can be collected on reconnect.
+
+    Usage::
+
+        --executor pssh:user@host1,host2
+    """
+
+    def __init__(
+        self,
+        hosts: list[SSHHost],
+        capture: bool = True,
+        snapshot: bool = False,
+        max_connections_per_host: int = 4,
+        provisioner: Provisioner | None = None,
+        work_dir: str = "~/.rinnsal/worker",
+        poll_interval: float = 5.0,
+        max_poll_interval: float = 30.0,
+    ) -> None:
+        super().__init__(
+            hosts=hosts,
+            capture=capture,
+            snapshot=snapshot,
+            max_connections_per_host=max_connections_per_host,
+            provisioner=provisioner,
+            work_dir=work_dir,
+        )
+        self._poll_interval = poll_interval
+        self._max_poll_interval = max_poll_interval
+        self._active_jobs: list[tuple[SSHHost, str]] = []
+
+    def submit(
+        self,
+        expr: TaskExpression,
+        resolved_args: tuple[Any, ...],
+        resolved_kwargs: dict[str, Any],
+    ) -> Future[ExecutionResult]:
+        """Submit a task for persistent remote execution."""
+        host = self._get_next_host()
+
+        # Serialize function and arguments
+        payload = cloudpickle.dumps(
+            (expr.func, resolved_args, resolved_kwargs)
+        )
+
+        result_future: Future[ExecutionResult] = Future()
+
+        def _run() -> None:
+            self._semaphore.acquire()
+            try:
+                import asyncio
+
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    job_id = loop.run_until_complete(
+                        self._submit_persistent(host, payload)
+                    )
+                finally:
+                    loop.close()
+
+                self._active_jobs.append((host, job_id))
+
+                # Start polling in this thread
+                self._poll_job(
+                    result_future, host, job_id,
+                )
+            except Exception as e:
+                result_future.set_result(
+                    ExecutionResult(value=None, success=False, error=e)
+                )
+            finally:
+                self._semaphore.release()
+
+        thread = threading.Thread(target=_run, daemon=True)
+        thread.start()
+        return result_future
+
+    def _connect_kwargs(self, host: SSHHost) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
+            "host": host.hostname,
+            "port": host.port,
+        }
+        if host.username:
+            kwargs["username"] = host.username
+        if host.key_path:
+            kwargs["client_keys"] = [str(host.key_path)]
+        kwargs["known_hosts"] = host.known_hosts
+        return kwargs
+
+    async def _submit_persistent(
+        self, host: SSHHost, payload: bytes,
+    ) -> str:
+        """SSH to host, write files, launch detached worker. Returns job_id."""
+        import uuid
+
+        job_id = uuid.uuid4().hex[:12]
+        job_dir = f"{self._work_dir}/jobs/{job_id}"
+
+        connect_kwargs = self._connect_kwargs(host)
+
+        async with asyncssh.connect(**connect_kwargs) as conn:
+            # Provision if needed (reuses parent's caching logic)
+            needs_provision = False
+            with self._provision_lock:
+                if host.hostname not in self._provision_events:
+                    self._provision_events[host.hostname] = threading.Event()
+                    needs_provision = True
+                event = self._provision_events[host.hostname]
+
+            if needs_provision:
+                try:
+                    await self._provision_host(conn, host)
+                except Exception as e:
+                    self._provision_errors[host.hostname] = e
+                    raise
+                finally:
+                    event.set()
+            else:
+                event.wait()
+
+            if host.hostname in self._provision_errors:
+                raise self._provision_errors[host.hostname]
+
+            # Create job directory and write files via SFTP
+            async with conn.start_sftp_client() as sftp:
+                await sftp.makedirs(job_dir)
+
+                async with sftp.open(
+                    f"{job_dir}/submission.pkl", "wb"
+                ) as f:
+                    await f.write(payload)
+
+                worker_script = _make_persistent_worker_script(
+                    job_dir=job_dir,
+                    checkpoint_path=self._checkpoint_path,
+                )
+                async with sftp.open(f"{job_dir}/worker.py", "w") as f:
+                    await f.write(worker_script)
+
+            # Launch detached
+            python_cmd = self._provisioner.python_command(self._work_dir)
+            launch_cmd = (
+                f"setsid nohup {python_cmd} {job_dir}/worker.py "
+                f"</dev/null >{job_dir}/launch.log 2>&1 & echo $!"
+            )
+            result = await conn.run(launch_cmd, check=False)
+            if result.exit_status != 0:
+                raise RuntimeError(
+                    f"Failed to launch worker on {host.hostname}: "
+                    f"{result.stderr}"
+                )
+
+            import sys
+
+            pid = result.stdout.strip()
+            print(
+                f"[rinnsal] Launched job {job_id} on "
+                f"{host.hostname} (PID {pid})",
+                file=sys.stderr,
+                flush=True,
+            )
+
+        return job_id
+
+    def _poll_job(
+        self,
+        future: Future[ExecutionResult],
+        host: SSHHost,
+        job_id: str,
+    ) -> None:
+        """Poll for job completion, syncing logger events incrementally."""
+        import asyncio
+        import sys
+        import time
+
+        from rinnsal.logger.proxy import replay_events
+
+        job_dir = f"{self._work_dir}/jobs/{job_id}"
+        connect_kwargs = self._connect_kwargs(host)
+        delay = self._poll_interval
+        events_offset = 0
+
+        while True:
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    done, events_offset = loop.run_until_complete(
+                        self._poll_once(
+                            connect_kwargs, job_dir, events_offset,
+                        )
+                    )
+                finally:
+                    loop.close()
+
+                if done:
+                    break
+            except Exception as e:
+                # Connection failed — retry
+                print(
+                    f"[rinnsal] Poll failed for {job_id} on "
+                    f"{host.hostname}: {e}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+
+            time.sleep(delay)
+            delay = min(delay * 1.5, self._max_poll_interval)
+
+        # Fetch result
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(
+                    self._fetch_result(connect_kwargs, job_dir)
+                )
+            finally:
+                loop.close()
+            future.set_result(result)
+        except Exception as e:
+            future.set_result(
+                ExecutionResult(value=None, success=False, error=e)
+            )
+
+    async def _poll_once(
+        self,
+        connect_kwargs: dict[str, Any],
+        job_dir: str,
+        events_offset: int,
+    ) -> tuple[bool, int]:
+        """Single poll iteration. Returns (is_done, new_events_offset)."""
+        from rinnsal.logger.proxy import replay_events
+
+        async with asyncssh.connect(**connect_kwargs) as conn:
+            # Sync new logger events incrementally
+            if self._logger is not None and events_offset >= 0:
+                try:
+                    ev_result = await conn.run(
+                        f"tail -c +{events_offset + 1} "
+                        f"{job_dir}/events.pb 2>/dev/null || true",
+                        check=False,
+                        encoding=None,
+                    )
+                    raw = ev_result.stdout
+                    if raw:
+                        if isinstance(raw, str):
+                            raw = raw.encode("latin-1")
+                        if len(raw) > 0:
+                            replay_events(self._logger, raw)
+                            events_offset += len(raw)
+                except Exception:
+                    pass
+
+            # Check completion
+            result = await conn.run(
+                f"test -f {job_dir}/.done && echo DONE || "
+                f"(test -f {job_dir}/pid && "
+                f"kill -0 $(cat {job_dir}/pid) 2>/dev/null && "
+                f"echo RUNNING || echo DEAD)",
+                check=False,
+            )
+            status = (result.stdout or "").strip()
+
+            if status == "DONE":
+                return True, events_offset
+            if status == "DEAD":
+                # Process died without writing .done
+                return True, events_offset
+
+            return False, events_offset
+
+    async def _fetch_result(
+        self,
+        connect_kwargs: dict[str, Any],
+        job_dir: str,
+    ) -> ExecutionResult:
+        """Fetch result.pkl, stdout.log, stderr.log from remote."""
+        async with asyncssh.connect(**connect_kwargs) as conn:
+            async with conn.start_sftp_client() as sftp:
+                # Read stdout/stderr logs
+                stdout = ""
+                stderr = ""
+                try:
+                    async with sftp.open(
+                        f"{job_dir}/stdout.log", "r"
+                    ) as f:
+                        stdout = await f.read()
+                except Exception:
+                    pass
+                try:
+                    async with sftp.open(
+                        f"{job_dir}/stderr.log", "r"
+                    ) as f:
+                        stderr = await f.read()
+                except Exception:
+                    pass
+
+                # Read result.pkl
+                try:
+                    async with sftp.open(
+                        f"{job_dir}/result.pkl", "rb"
+                    ) as f:
+                        result_bytes = await f.read()
+                except Exception as e:
+                    return ExecutionResult(
+                        value=None,
+                        stdout=stdout,
+                        stderr=stderr,
+                        success=False,
+                        error=RuntimeError(
+                            f"Failed to read result.pkl: {e}"
+                        ),
+                    )
+
+            outcome = cloudpickle.loads(result_bytes)
+
+            # Tuple: ("success"|"error", result|error, None|tb, card)
+            card = outcome[3] if len(outcome) > 3 else None
+
+            if outcome[0] == "success":
+                return ExecutionResult(
+                    value=outcome[1],
+                    stdout=stdout,
+                    stderr=stderr,
+                    success=True,
+                    card=card,
+                )
+            else:
+                return ExecutionResult(
+                    value=None,
+                    stdout=stdout,
+                    stderr=stderr + (outcome[2] or ""),
+                    success=False,
+                    error=outcome[1],
+                    card=card,
+                )
+
+    def shutdown(self, wait: bool = True) -> None:
+        """Cancel active remote jobs if not waiting."""
+        if not wait:
+            import asyncio
+
+            for host, job_id in self._active_jobs:
+                try:
+                    job_dir = f"{self._work_dir}/jobs/{job_id}"
+                    connect_kwargs = self._connect_kwargs(host)
+                    loop = asyncio.new_event_loop()
+                    try:
+                        loop.run_until_complete(
+                            self._kill_remote_job(connect_kwargs, job_dir)
+                        )
+                    finally:
+                        loop.close()
+                except Exception:
+                    pass
+        self._active_jobs.clear()
+
+    @staticmethod
+    async def _kill_remote_job(
+        connect_kwargs: dict[str, Any], job_dir: str,
+    ) -> None:
+        async with asyncssh.connect(**connect_kwargs) as conn:
+            await conn.run(
+                f"test -f {job_dir}/pid && "
+                f"kill $(cat {job_dir}/pid) 2>/dev/null; "
+                f"touch {job_dir}/.done",
+                check=False,
+            )
+
+    def __repr__(self) -> str:
+        hosts_str = ", ".join(str(h) for h in self._hosts)
+        return f"PersistentSSHExecutor(hosts=[{hosts_str}])"

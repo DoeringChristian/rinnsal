@@ -772,11 +772,35 @@ def _create_executor(name: str, capture: bool = True) -> Any:
             "--executor ssh:[user@]host[:port] "
             "e.g. --executor ssh:rgllab or --executor ssh:user@host1,host2"
         )
-    elif name == "ray":
+    elif name.startswith("pssh:"):
+        from rinnsal.execution.ssh import PersistentSSHExecutor
+        from rinnsal.execution.provisioner import AutoProvisioner
+
+        host_specs = name[5:]  # strip "pssh:"
+        if not host_specs:
+            raise ValueError(
+                "Persistent SSH executor requires at least one host: "
+                "--executor pssh:[user@]host[:port]"
+            )
+
+        hosts = [_parse_ssh_host(s.strip()) for s in host_specs.split(",")]
+        return PersistentSSHExecutor(
+            hosts=hosts,
+            capture=capture,
+            provisioner=AutoProvisioner(),
+        )
+    elif name == "pssh":
+        raise ValueError(
+            "Persistent SSH executor requires a host: "
+            "--executor pssh:[user@]host[:port] "
+            "e.g. --executor pssh:rgllab"
+        )
+    elif name == "ray" or name.startswith("ray:"):
         try:
             from rinnsal.execution.ray_executor import RayExecutor
 
-            return RayExecutor(capture=capture)
+            address = name[4:] if name.startswith("ray:") else None
+            return RayExecutor(capture=capture, address=address)
         except ImportError:
             raise ValueError("Ray executor requires ray to be installed")
     elif name == "slurm":
