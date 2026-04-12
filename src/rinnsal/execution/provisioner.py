@@ -135,8 +135,24 @@ class PixiProvisioner:
         # Run custom provision script if present (for builds like cmake/mitsuba).
         # Uses "pixi run bash" so the script sees the pixi-managed Python
         # and all dependencies on PATH.
+        # We also set Python_ROOT_DIR so cmake's find_package(Python) picks
+        # up pixi's Python instead of the system one, and invalidate any
+        # stale cmake cache that points at a different Python.
         provision_sh = self._project_dir / ".rinnsal-provision.sh"
         if provision_sh.exists():
+            lines.append(
+                # Resolve pixi's Python and export hints for cmake
+                f'PIXI_PYTHON="$(pixi run which python)" && '
+                f'PIXI_PYTHON_DIR="$(dirname "$(dirname "$PIXI_PYTHON")")" && '
+                f'export Python_ROOT_DIR="$PIXI_PYTHON_DIR" && '
+                f'export Python3_ROOT_DIR="$PIXI_PYTHON_DIR" && '
+                # Invalidate cmake caches that hardcode a different Python
+                f'find {work_dir} -name CMakeCache.txt -exec '
+                f'grep -l "Python.*EXECUTABLE" {{}} \\; | while read cache; do '
+                f'if ! grep -q "$PIXI_PYTHON" "$cache" 2>/dev/null; then '
+                f'echo "[rinnsal] Clearing stale cmake cache: $cache"; '
+                f'rm -f "$cache"; fi; done'
+            )
             lines.append(f"pixi run bash {work_dir}/.rinnsal-provision.sh")
         return "\n".join(lines)
 
