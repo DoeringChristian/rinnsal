@@ -38,14 +38,31 @@ def get_config() -> dict:
 @app.get("/api/runs")
 def list_runs(
     root: Annotated[str, Query(description="Root directory to search for runs")]
-) -> list[str]:
-    """List all runs under the given root directory."""
+) -> list[dict]:
+    """List all runs under the given root directory.
+
+    Returns a list of ``{path, name, flow}`` dicts.  The *flow* field
+    is extracted from the directory structure when the run lives under
+    ``<root>/flows/<flow_name>/runs/<run_id>/``.
+    """
     root_path = Path(root).resolve()
     if not root_path.exists():
         return []
 
     runs = discover_runs(root_path)
-    return [str(r) for r in runs]
+    result: list[dict] = []
+    for r in runs:
+        name = r.name
+        # Detect flow name from path: .../flows/<flow>/runs/<run_id>
+        flow: str | None = None
+        try:
+            parts = r.relative_to(root_path).parts
+            if len(parts) >= 3 and parts[0] == "flows" and parts[2] == "runs":
+                flow = parts[1]
+        except ValueError:
+            pass
+        result.append({"path": str(r), "name": name, "flow": flow})
+    return result
 
 
 @app.get("/api/scalars/{run_path:path}")

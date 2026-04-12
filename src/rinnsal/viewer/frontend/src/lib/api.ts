@@ -9,6 +9,7 @@ export interface Config {
 export interface RunInfo {
   path: string;
   name: string;
+  flow: string | null;
 }
 
 export async function fetchConfig(): Promise<Config> {
@@ -24,11 +25,7 @@ export async function fetchRuns(rootDir: string): Promise<RunInfo[]> {
   if (!response.ok) {
     throw new Error(`Failed to fetch runs: ${response.statusText}`);
   }
-  const paths: string[] = await response.json();
-  return paths.map((path) => ({
-    path,
-    name: path.split("/").pop() || path,
-  }));
+  return response.json();
 }
 
 /** Scalar data: {tag: [{it, value, ts}, ...]} */

@@ -34,7 +34,54 @@ export function getRunColor(run: string): string {
   return `hsl(${hue}, 70%, 45%)`;
 }
 
-const MAX_VISIBLE = 200;
+/** Format a run timestamp like 20260412_151109 to a readable string. */
+function formatRunName(name: string): string {
+  const m = name.match(/^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/);
+  if (!m) return name;
+  return `${m[1]}-${m[2]}-${m[3]} ${m[4]}:${m[5]}:${m[6]}`;
+}
+
+function RunRow({
+  run,
+  isSelected,
+  onToggle,
+  onSolo,
+}: {
+  run: RunInfo;
+  isSelected: boolean;
+  onToggle: () => void;
+  onSolo: () => void;
+}) {
+  const color = getRunColor(run.path);
+  return (
+    <div className="flex items-start group hover:bg-gray-50 rounded py-0.5 gap-1">
+      <button
+        onClick={onSolo}
+        title="Solo — show only this run"
+        className="w-4 h-4 mt-0.5 rounded-full shrink-0 opacity-30 hover:opacity-100 transition-opacity border border-gray-300 hover:border-gray-500"
+        style={{ backgroundColor: color }}
+      />
+      <input
+        type="checkbox"
+        checked={isSelected}
+        onChange={onToggle}
+        className="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 shrink-0 cursor-pointer"
+      />
+      <span
+        className="text-sm break-all leading-tight flex-1 cursor-pointer"
+        style={{ color: isSelected ? color : undefined }}
+        title={run.path}
+        onClick={onToggle}
+      >
+        {formatRunName(run.name)}
+      </span>
+      <span
+        className="w-2 h-2 mt-1.5 rounded-full shrink-0"
+        style={{ backgroundColor: isSelected ? color : "transparent" }}
+      />
+    </div>
+  );
+}
 
 export default function RunSelector({
   rootDir,
@@ -45,6 +92,7 @@ export default function RunSelector({
   const [runs, setRuns] = useState<RunInfo[]>([]);
   const [filter, setFilter] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [collapsedFlows, setCollapsedFlows] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     if (!rootDir) {
@@ -64,7 +112,12 @@ export default function RunSelector({
     }
     try {
       const regex = new RegExp(filter, "i");
-      return { filteredRuns: runs.filter((r) => regex.test(r.name)), filterError: null };
+      return {
+        filteredRuns: runs.filter(
+          (r) => regex.test(r.name) || (r.flow && regex.test(r.flow))
+        ),
+        filterError: null,
+      };
     } catch (e) {
       return {
         filteredRuns: runs,
@@ -73,8 +126,27 @@ export default function RunSelector({
     }
   }, [runs, filter]);
 
-  const visibleRuns = filteredRuns.slice(0, MAX_VISIBLE);
-  const hasMore = filteredRuns.length > MAX_VISIBLE;
+  // Group runs by flow, with ungrouped runs under null
+  const groups = useMemo(() => {
+    const flowMap = new Map<string | null, RunInfo[]>();
+    for (const r of filteredRuns) {
+      const key = r.flow;
+      if (!flowMap.has(key)) flowMap.set(key, []);
+      flowMap.get(key)!.push(r);
+    }
+    // Sort: named flows first (alphabetical), then ungrouped
+    const result: { flow: string | null; runs: RunInfo[] }[] = [];
+    const sorted = [...flowMap.entries()].sort(([a], [b]) => {
+      if (a === null && b === null) return 0;
+      if (a === null) return 1;
+      if (b === null) return -1;
+      return a.localeCompare(b);
+    });
+    for (const [flow, flowRuns] of sorted) {
+      result.push({ flow, runs: flowRuns });
+    }
+    return result;
+  }, [filteredRuns]);
 
   const toggleRun = (runPath: string) => {
     if (selectedRuns.includes(runPath)) {
@@ -88,23 +160,47 @@ export default function RunSelector({
     onSelectionChange([runPath]);
   };
 
-  const visiblePaths = visibleRuns.map((r) => r.path);
-  const allVisibleSelected = visiblePaths.length > 0 &&
-    visiblePaths.every((p) => selectedRuns.includes(p));
+  const toggleFlowCollapsed = (flow: string) => {
+    setCollapsedFlows((prev) => {
+      const next = new Set(prev);
+      if (next.has(flow)) next.delete(flow);
+      else next.add(flow);
+      return next;
+    });
+  };
 
-  const toggleAll = () => {
-    if (allVisibleSelected) {
-      const visibleSet = new Set(visiblePaths);
-      onSelectionChange(selectedRuns.filter((r) => !visibleSet.has(r)));
+  const toggleFlowAll = (flowRuns: RunInfo[]) => {
+    const paths = flowRuns.map((r) => r.path);
+    const allSelected = paths.every((p) => selectedRuns.includes(p));
+    if (allSelected) {
+      const pathSet = new Set(paths);
+      onSelectionChange(selectedRuns.filter((r) => !pathSet.has(r)));
     } else {
       const existing = new Set(selectedRuns);
-      const toAdd = visiblePaths.filter((p) => !existing.has(p));
+      const toAdd = paths.filter((p) => !existing.has(p));
+      onSelectionChange([...selectedRuns, ...toAdd]);
+    }
+  };
+
+  const allPaths = filteredRuns.map((r) => r.path);
+  const allSelected =
+    allPaths.length > 0 && allPaths.every((p) => selectedRuns.includes(p));
+
+  const toggleAll = () => {
+    if (allSelected) {
+      const pathSet = new Set(allPaths);
+      onSelectionChange(selectedRuns.filter((r) => !pathSet.has(r)));
+    } else {
+      const existing = new Set(selectedRuns);
+      const toAdd = allPaths.filter((p) => !existing.has(p));
       onSelectionChange([...selectedRuns, ...toAdd]);
     }
   };
 
   if (!rootDir) {
-    return <p className="text-sm text-gray-500">Enter a directory path above.</p>;
+    return (
+      <p className="text-sm text-gray-500">Enter a directory path above.</p>
+    );
   }
 
   if (isLoading) {
@@ -138,58 +234,70 @@ export default function RunSelector({
           onClick={toggleAll}
           className="text-xs text-blue-600 hover:text-blue-800 transition-colors"
         >
-          {allVisibleSelected ? "Deselect all" : "Select all"}
+          {allSelected ? "Deselect all" : "Select all"}
         </button>
       </div>
 
-      <div className="space-y-0.5">
-        {visibleRuns.map((run) => {
-          const isSelected = selectedRuns.includes(run.path);
-          const color = getRunColor(run.path);
+      <div className="space-y-1">
+        {groups.map(({ flow, runs: flowRuns }) => {
+          if (flow === null) {
+            // Ungrouped runs — render flat
+            return flowRuns.map((run) => (
+              <RunRow
+                key={run.path}
+                run={run}
+                isSelected={selectedRuns.includes(run.path)}
+                onToggle={() => toggleRun(run.path)}
+                onSolo={() => soloRun(run.path)}
+              />
+            ));
+          }
+
+          const isCollapsed = collapsedFlows.has(flow);
+          const flowPaths = flowRuns.map((r) => r.path);
+          const selectedCount = flowPaths.filter((p) =>
+            selectedRuns.includes(p)
+          ).length;
 
           return (
-            <div
-              key={run.path}
-              className="flex items-start group hover:bg-gray-50 rounded py-0.5 gap-1"
-            >
-              {/* Solo button — round, left of checkbox */}
-              <button
-                onClick={() => soloRun(run.path)}
-                title="Solo — show only this run"
-                className="w-4 h-4 mt-0.5 rounded-full shrink-0 opacity-30 hover:opacity-100 transition-opacity border border-gray-300 hover:border-gray-500"
-                style={{ backgroundColor: color }}
-              />
-              {/* Checkbox */}
-              <input
-                type="checkbox"
-                checked={isSelected}
-                onChange={() => toggleRun(run.path)}
-                className="mt-0.5 rounded border-gray-300 text-blue-600 focus:ring-blue-500 shrink-0 cursor-pointer"
-              />
-              {/* Run name — wrapping */}
-              <span
-                className="text-sm break-all leading-tight flex-1 cursor-pointer"
-                style={{
-                  color: isSelected ? color : undefined,
-                }}
-                title={run.path}
-                onClick={() => toggleRun(run.path)}
-              >
-                {run.name}
-              </span>
-              {/* Color dot on right — always present to keep layout stable */}
-              <span
-                className="w-2 h-2 mt-1.5 rounded-full shrink-0"
-                style={{ backgroundColor: isSelected ? color : "transparent" }}
-              />
+            <div key={flow} className="mb-1">
+              <div className="flex items-center gap-1 py-0.5">
+                <button
+                  onClick={() => toggleFlowCollapsed(flow)}
+                  className="text-xs text-gray-400 hover:text-gray-600 w-4 text-center"
+                >
+                  {isCollapsed ? "\u25B6" : "\u25BC"}
+                </button>
+                <button
+                  onClick={() => toggleFlowAll(flowRuns)}
+                  className="text-xs font-medium text-gray-700 hover:text-blue-600 flex-1 text-left truncate"
+                  title={`${flow} (${flowRuns.length} runs)`}
+                >
+                  {flow}
+                </button>
+                <span className="text-xs text-gray-400">
+                  {selectedCount > 0 && (
+                    <span className="text-blue-600">{selectedCount}/</span>
+                  )}
+                  {flowRuns.length}
+                </span>
+              </div>
+              {!isCollapsed && (
+                <div className="ml-4 space-y-0.5">
+                  {flowRuns.map((run) => (
+                    <RunRow
+                      key={run.path}
+                      run={run}
+                      isSelected={selectedRuns.includes(run.path)}
+                      onToggle={() => toggleRun(run.path)}
+                      onSolo={() => soloRun(run.path)}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
           );
         })}
-        {hasMore && (
-          <p className="text-xs text-gray-400 py-1">
-            Showing {MAX_VISIBLE} of {filteredRuns.length} runs. Use filter to narrow down.
-          </p>
-        )}
       </div>
     </div>
   );
