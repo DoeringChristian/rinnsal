@@ -55,7 +55,15 @@ function TextRunCard({ run, texts, color }: TextRunCardProps) {
   const [copied, setCopied] = useState(false);
 
   const runName = run.split("/").pop() || run;
-  const currentText = texts[selectedIdx];
+
+  // Auto-advance to latest when new entries arrive
+  const safeIdx = Math.min(selectedIdx, texts.length - 1);
+  const isAtLatest = selectedIdx >= texts.length - 1;
+  if (isAtLatest && safeIdx !== texts.length - 1) {
+    setSelectedIdx(texts.length - 1);
+  }
+
+  const currentText = texts[isAtLatest ? texts.length - 1 : safeIdx];
 
   const handleCopy = async () => {
     try {

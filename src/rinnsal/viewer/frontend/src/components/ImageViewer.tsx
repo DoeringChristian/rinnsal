@@ -66,8 +66,17 @@ function ImageRunCard({ run, runPath, tag, images, color, compareGroups, onAddTo
   const [selectedIdx, setSelectedIdx] = useState(images.length - 1);
   const [sliderActive, setSliderActive] = useState(false);
   const runName = run.split("/").pop() || run;
-  const current = images[selectedIdx];
-  const imgSrc = imageUrl(runPath, tag, current.it);
+
+  // Track latest image when new ones arrive
+  const safeIdx = Math.min(selectedIdx, images.length - 1);
+  const isAtLatest = selectedIdx >= images.length - 1;
+  if (isAtLatest && safeIdx !== images.length - 1) {
+    setSelectedIdx(images.length - 1);
+  }
+
+  const currentImg = images[isAtLatest ? images.length - 1 : safeIdx];
+  // Cache-bust with image count so new data is shown on refresh
+  const imgSrc = imageUrl(runPath, tag, currentImg.it) + `&_v=${images.length}`;
 
   const slot: CompareSlot = {
     type: "image", run, tag, iterations: images.map((i) => i.it),
@@ -89,7 +98,7 @@ function ImageRunCard({ run, runPath, tag, images, color, compareGroups, onAddTo
       <div className="flex items-center justify-between mb-3">
         <span className="font-medium" style={{ color }}>{runName}</span>
         <div className="flex items-center gap-2">
-          <span className="text-sm text-gray-500">it:{current.it}</span>
+          <span className="text-sm text-gray-500">it:{currentImg.it}</span>
           <AddToCompareButton groups={compareGroups} onAdd={(gid) => onAddToCompare(slot, gid)} />
         </div>
       </div>
@@ -98,7 +107,7 @@ function ImageRunCard({ run, runPath, tag, images, color, compareGroups, onAddTo
           <input type="range" min={0} max={images.length - 1} value={selectedIdx} onChange={(e) => setSelectedIdx(parseInt(e.target.value))} className="w-full" draggable={false} />
         </div>
       )}
-      <img src={imgSrc} alt={`${runName} - ${tag} @ ${current.it}`} className="max-w-full rounded" loading="lazy" />
+      <img src={imgSrc} alt={`${runName} - ${tag} @ ${currentImg.it}`} className="max-w-full rounded" loading="lazy" />
     </div>
   );
 }
