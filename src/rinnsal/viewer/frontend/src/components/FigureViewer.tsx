@@ -66,8 +66,18 @@ function FigureRunCard({ run, runPath, tag, figures, color, compareGroups, onAdd
   const [selectedIdx, setSelectedIdx] = useState(figures.length - 1);
   const [sliderActive, setSliderActive] = useState(false);
   const runName = run.split("/").pop() || run;
-  const currentFigure = figures[selectedIdx];
-  const imgUrl = figureImageUrl(runPath, tag, currentFigure.it);
+
+  // Track latest figure when new ones arrive
+  const safeIdx = Math.min(selectedIdx, figures.length - 1);
+  const isAtLatest = selectedIdx >= figures.length - 1;
+  if (isAtLatest && safeIdx !== figures.length - 1) {
+    // Auto-advance to newest if user was at the end
+    setSelectedIdx(figures.length - 1);
+  }
+
+  const currentFigure = figures[isAtLatest ? figures.length - 1 : safeIdx];
+  // Cache-bust with figure count so new data is shown on refresh
+  const imgUrl = figureImageUrl(runPath, tag, currentFigure.it) + `&_v=${figures.length}`;
 
   const slot: CompareSlot = {
     type: "figure", run, tag, iterations: figures.map((f) => f.it),

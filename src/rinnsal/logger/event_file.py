@@ -32,17 +32,21 @@ class EventFileWriter:
         self._lock = threading.Lock()
 
     def write(self, event: Event) -> None:
-        """Write an event to the file."""
+        """Write an event to the file and flush immediately."""
         data = event.SerializeToString()
         length = struct.pack("<I", len(data))
         with self._lock:
             self._file.write(length)
             self._file.write(data)
+            self._file.flush()
 
     def flush(self) -> None:
         """Flush buffered data to disk."""
+        import os
+
         with self._lock:
             self._file.flush()
+            os.fsync(self._file.fileno())
 
     def close(self) -> None:
         """Close the file."""

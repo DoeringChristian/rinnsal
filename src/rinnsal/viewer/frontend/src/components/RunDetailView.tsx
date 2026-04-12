@@ -45,9 +45,9 @@ export default function RunDetailView({
   const loadedRef = useRef<Set<string>>(new Set());
 
   const loadTab = useCallback(
-    async (tab: DetailTab) => {
+    async (tab: DetailTab, force = false) => {
       const key = `${runPath}:${tab}`;
-      if (loadedRef.current.has(key)) return;
+      if (!force && loadedRef.current.has(key)) return;
       loadedRef.current.add(key);
       setIsLoading(true);
       try {
@@ -90,6 +90,14 @@ export default function RunDetailView({
   // Load current tab on mount and tab switch
   useEffect(() => {
     loadTab(activeTab);
+  }, [activeTab, loadTab]);
+
+  // Auto-refresh the active tab every 5 seconds for live data
+  useEffect(() => {
+    const interval = setInterval(() => {
+      loadTab(activeTab, true);
+    }, 5000);
+    return () => clearInterval(interval);
   }, [activeTab, loadTab]);
 
   // Reset loaded cache when run changes

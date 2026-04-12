@@ -27,6 +27,7 @@ def _worker_execute(
     capture: bool,
     remapped_pythonpath: str | None = None,
     checkpoint_path: str | None = None,
+    event_file: str | None = None,
 ) -> tuple[bool, Any, str, str, bytes | None, list[dict] | None, bytes]:
     """Worker function that runs in a subprocess.
 
@@ -57,7 +58,10 @@ def _worker_execute(
     from rinnsal.logger.proxy import LoggerProxy
 
     current._set_card(Card())
-    proxy = LoggerProxy()
+    # When event_file is provided, events are written directly to the
+    # flow's events.pb (flushed per event) so the viewer can show live
+    # data.  Otherwise fall back to buffer mode (replayed after task).
+    proxy = LoggerProxy(event_file=event_file)
     current._set_logger(proxy)
     if checkpoint_path:
         current._set_checkpoint(Checkpoint(path=Path(checkpoint_path)))
@@ -127,6 +131,16 @@ class SubprocessExecutor(Executor):
     def max_workers(self) -> int:
         return self._max_workers
 
+    def _get_event_file(self) -> str | None:
+        """Resolve events.pb path from the logger for direct file writes."""
+        if self._logger is None:
+            return None
+        writer = getattr(self._logger, "_event_writer", None)
+        if writer is None:
+            return None
+        path = getattr(writer, "_path", None)
+        return str(path) if path else None
+
     def _prepare_submission(
         self,
         expr: TaskExpression,
@@ -158,6 +172,7 @@ class SubprocessExecutor(Executor):
             self._capture,
             remapped_pythonpath,
             self._checkpoint_path,
+            self._get_event_file(),
         )
 
     @staticmethod
@@ -299,6 +314,14 @@ class ForkExecutor(Executor):
         serialized_args = cloudpickle.dumps(resolved_args)
         serialized_kwargs = cloudpickle.dumps(resolved_kwargs)
 
+        # Reuse SubprocessExecutor's event file resolution
+        event_file: str | None = None
+        if self._logger is not None:
+            writer = getattr(self._logger, "_event_writer", None)
+            if writer is not None:
+                path = getattr(writer, "_path", None)
+                event_file = str(path) if path else None
+
         return (
             _worker_execute,
             serialized_func,
@@ -307,6 +330,7 @@ class ForkExecutor(Executor):
             self._capture,
             remapped_pythonpath,
             self._checkpoint_path,
+            event_file,
         )
 
     def submit(

@@ -449,6 +449,21 @@ class FlowResult:
 
             return self._return_value
         finally:
+            # Mark any still-running tasks as killed so the viewer
+            # doesn't show them as "running" forever.
+            for expr in ordered:
+                if (
+                    expr.hash not in completed
+                    and expr.hash not in failed_hashes
+                    and expr.task_name
+                ):
+                    logger.add_task_node(
+                        task_name=expr.task_name,
+                        task_hash=expr.hash,
+                        status="failed",
+                        error="killed",
+                    )
+
             # Close logger
             logger.add_text(
                 "flow/summary",

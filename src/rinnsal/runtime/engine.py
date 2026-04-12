@@ -132,6 +132,16 @@ class ExecutionEngine:
                 task_dir.mkdir(parents=True, exist_ok=True)
                 checkpoint_path = task_dir / "checkpoint.dat"
 
+            # Emit "running" status before execution so the viewer
+            # shows the task immediately, not only after it completes.
+            if ctx_logger is not None and expr.task_name:
+                ctx_logger.add_task_node(
+                    task_name=expr.task_name,
+                    task_hash=expr.hash,
+                    status="running",
+                )
+                ctx_logger.flush()
+
             # Execute the task
             _task_t0 = datetime.now()
             try:
