@@ -20,6 +20,44 @@ if TYPE_CHECKING:
     from rinnsal.core.expression import TaskExpression
 
 
+class _LoggingStream:
+    """Stream wrapper that captures text and periodically logs it.
+
+    Wraps a StringIO for capture, and when an event_file-backed
+    LoggerProxy is available, also writes chunks to the logger as
+    text events so the viewer can show console output in real-time.
+    """
+
+    def __init__(
+        self, name: str, proxy: Any, task_name: str = "",
+    ) -> None:
+        import io
+        self._buf = io.StringIO()
+        self._proxy = proxy
+        self._tag = f"{task_name}/{name}" if task_name else name
+        self._pending = ""
+        self._has_event_file = getattr(proxy, "_event_file_handle", None) is not None
+
+    def write(self, s: str) -> int:
+        self._buf.write(s)
+        if self._has_event_file:
+            self._pending += s
+            # Flush to logger on newlines or when buffer is large
+            if "\n" in self._pending or len(self._pending) > 4096:
+                self._proxy.add_text(self._tag, self._pending)
+                self._pending = ""
+        return len(s)
+
+    def flush(self) -> None:
+        self._buf.flush()
+        if self._has_event_file and self._pending:
+            self._proxy.add_text(self._tag, self._pending)
+            self._pending = ""
+
+    def getvalue(self) -> str:
+        return self._buf.getvalue()
+
+
 def _worker_execute(
     serialized_func: bytes,
     serialized_args: bytes,
@@ -51,9 +89,6 @@ def _worker_execute(
     args = cloudpickle.loads(serialized_args)
     kwargs = cloudpickle.loads(serialized_kwargs)
 
-    stdout_capture = io.StringIO()
-    stderr_capture = io.StringIO()
-
     from rinnsal.context import Card, Checkpoint, current
     from rinnsal.logger.proxy import LoggerProxy
 
@@ -63,6 +98,12 @@ def _worker_execute(
     # data.  Otherwise fall back to buffer mode (replayed after task).
     proxy = LoggerProxy(event_file=event_file)
     current._set_logger(proxy)
+
+    # Use logging streams that write console output to the logger in
+    # real-time (when event_file is set), so the viewer's Console tab
+    # shows output from long-running tasks.
+    stdout_capture = _LoggingStream("stdout", proxy) if event_file else io.StringIO()
+    stderr_capture = _LoggingStream("stderr", proxy) if event_file else io.StringIO()
     if checkpoint_path:
         current._set_checkpoint(Checkpoint(path=Path(checkpoint_path)))
     try:
