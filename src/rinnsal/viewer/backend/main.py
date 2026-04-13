@@ -97,7 +97,7 @@ def get_figures_meta(run_path: str) -> dict:
     cache = get_cache(_resolve_run_path(run_path))
     result: dict[str, list[dict]] = {}
     for tag, data in cache.figures.items():
-        result[tag] = [{"it": it} for it, _img, _data, _interactive in data]
+        result[tag] = [{"it": entry[0]} for entry in data]
     return result
 
 
@@ -110,9 +110,11 @@ def get_figure_image(
     """Get a single figure image as PNG."""
     cache = get_cache(_resolve_run_path(run_path))
     figures = cache.figures.get(tag, [])
-    for fig_it, image, _data, _interactive in figures:
+    for fig_it, image, image_blob_hash, _data, _data_blob, _interactive, _fmt in figures:
         if fig_it == it:
-            return Response(content=image, media_type="image/png")
+            png = image or (cache.get_blob(image_blob_hash) or b"")
+            if png:
+                return Response(content=png, media_type="image/png")
     return Response(status_code=404, content=b"Figure not found")
 
 
@@ -124,7 +126,7 @@ def get_images_meta(run_path: str) -> dict:
     for tag, data in cache.images.items():
         result[tag] = [
             {"it": it, "width": w, "height": h}
-            for it, _png, w, h in data
+            for it, _png, _blob, w, h in data
         ]
     return result
 
@@ -138,48 +140,91 @@ def get_image(
     """Get a single image as PNG."""
     cache = get_cache(_resolve_run_path(run_path))
     images = cache.images.get(tag, [])
-    for img_it, png_data, _w, _h in images:
+    for img_it, png_data, blob_hash, _w, _h in images:
         if img_it == it:
-            return Response(content=png_data, media_type="image/png")
+            png = png_data or (cache.get_blob(blob_hash) or b"")
+            if png:
+                return Response(content=png, media_type="image/png")
     return Response(status_code=404, content=b"Image not found")
 
 
 @app.get("/api/cards/{run_path:path}")
-def get_cards(run_path: str) -> dict:
-    """Get card data for a run. Returns {task: [{it, kind, title, content, image?}, ...]}."""
+def get_cards_index(run_path: str) -> dict:
+    """List every named card in a run.
+
+    Returns ``{"cards": [{name, task, iterations, component_kinds}]}``.
+    Iteration order is ascending; ``component_kinds`` previews the
+    composition of the latest emission.
+    """
     cache = get_cache(_resolve_run_path(run_path))
-    # Cards are stored differently — need to read from events directly
-    # For now, read from the events.pb if cards exist
-    from rinnsal.data.logger.event_file import EventFileReader
-    from rinnsal.data.logger.logger import EVENTS_FILE
+    out: list[dict] = []
+    for (task, name), entries in cache.cards.items():
+        latest = entries[-1] if entries else (0, [])
+        out.append(
+            {
+                "name": name,
+                "task": task,
+                "iterations": [it for it, _ in entries],
+                "component_kinds": [c["kind"] for c in latest[1]],
+            }
+        )
+    out.sort(key=lambda c: (c["task"], c["name"]))
+    return {"cards": out}
 
-    events_path = _resolve_run_path(run_path) / EVENTS_FILE
-    result: dict[str, list[dict]] = {}
 
-    if not events_path.exists():
-        return result
+@app.get("/api/card/{run_path:path}")
+def get_card(
+    run_path: str,
+    name: str = Query(...),
+    task: str = Query(""),
+    it: int | None = Query(None),
+) -> dict:
+    """Get a single card snapshot.
 
-    try:
-        for event in EventFileReader(events_path):
-            if event.WhichOneof("data") == "card":
-                task = event.card.task
-                if task not in result:
-                    result[task] = []
-                card_data: dict = {
-                    "it": event.iteration,
-                    "kind": event.card.kind,
-                    "title": event.card.title,
-                    "content": event.card.content,
-                }
-                if event.card.image:
-                    card_data["image"] = base64.b64encode(
-                        event.card.image
-                    ).decode()
-                result[task].append(card_data)
-    except (IOError, OSError):
-        pass
+    When *it* is omitted, returns the latest emission. Components are
+    returned with metadata + (small) inline payloads; heavy payloads
+    must be fetched via the ``/api/blob`` endpoint using the hashes in
+    each component dict.
+    """
+    cache = get_cache(_resolve_run_path(run_path))
+    entries = cache.cards.get((task, name), [])
+    if not entries:
+        return {"name": name, "task": task, "it": None, "components": []}
+    if it is None:
+        chosen_it, components = entries[-1]
+    else:
+        chosen_it, components = entries[-1]
+        for ev_it, comps in entries:
+            if ev_it == it:
+                chosen_it, components = ev_it, comps
+                break
+    return {
+        "name": name,
+        "task": task,
+        "it": chosen_it,
+        "components": components,
+    }
 
-    return result
+
+@app.get("/api/tags/{run_path:path}")
+def get_tags(run_path: str) -> dict:
+    """Unified listing of every (tag, kind) emitted in a run."""
+    cache = get_cache(_resolve_run_path(run_path))
+    return {"tags": cache.tags()}
+
+
+@app.get("/api/blob/{run_path:path}/{blob_hash}")
+def get_blob(run_path: str, blob_hash: str) -> Response:
+    """Stream a content-addressed blob from the run's FileDatabase root.
+
+    The blob_hash is sha256 hex; payload type (PNG, plotly JSON,
+    pickled bytes) is determined by the caller.
+    """
+    cache = get_cache(_resolve_run_path(run_path))
+    data = cache.get_blob(blob_hash)
+    if data is None:
+        return Response(status_code=404, content=b"blob not found")
+    return Response(content=data, media_type="application/octet-stream")
 
 
 @app.get("/api/flows")

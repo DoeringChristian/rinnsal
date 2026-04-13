@@ -9,12 +9,12 @@ import {
   fetchText,
   fetchFiguresMeta,
   fetchImagesMeta,
-  fetchCards,
+  fetchCardsIndex,
   ScalarData,
   TextData,
   FigureMetaData,
   ImageMetaData,
-  CardData,
+  CardIndexEntry,
 } from "../lib/api";
 import type { CompareSlot } from "./CompareView";
 
@@ -26,6 +26,8 @@ interface RunDetailViewProps {
   onBack: () => void;
   compareGroups?: any[];
   onAddToCompare?: (slot: CompareSlot, groupId: number | null) => void;
+  /** Bumped by the sidebar refresh button; triggers a re-fetch of the active tab. */
+  refreshKey?: number;
 }
 
 /** Tags that are special-purpose and shown in Console/System tabs. */
@@ -58,13 +60,14 @@ export default function RunDetailView({
   onBack,
   compareGroups = [],
   onAddToCompare,
+  refreshKey = 0,
 }: RunDetailViewProps) {
   const [activeTab, setActiveTab] = useState<DetailTab>("scalars");
   const [scalars, setScalars] = useState<Map<string, ScalarData>>(new Map());
   const [text, setText] = useState<Map<string, TextData>>(new Map());
   const [figures, setFigures] = useState<Map<string, FigureMetaData>>(new Map());
   const [images, setImages] = useState<Map<string, ImageMetaData>>(new Map());
-  const [cards, setCards] = useState<Map<string, CardData>>(new Map());
+  const [cards, setCards] = useState<Map<string, CardIndexEntry[]>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
   const loadedRef = useRef<Set<string>>(new Set());
   const contentRef = useRef<HTMLDivElement>(null);
@@ -112,7 +115,7 @@ export default function RunDetailView({
             break;
           }
           case "cards": {
-            const d = await fetchCards(runPath);
+            const d = await fetchCardsIndex(runPath);
             setCards((prev) => new Map(prev).set(runPath, d));
             break;
           }
@@ -159,17 +162,17 @@ export default function RunDetailView({
     }
   });
 
-  // Auto-refresh the active tab every 5 seconds for live data
+  // Auto-polling removed: the 5-second loop made the viewer painful over
+  // SSH tunnels. The sidebar refresh button bumps `refreshKey`, which
+  // clears the per-tab "already loaded" memo and forces a re-fetch.
   useEffect(() => {
-    const interval = setInterval(() => {
-      // Save scroll before refresh
-      if (contentRef.current) {
-        scrollRef.current[activeTab] = contentRef.current.scrollTop;
-      }
-      loadTab(activeTab, true);
-    }, 5000);
-    return () => clearInterval(interval);
-  }, [activeTab, loadTab]);
+    if (refreshKey === 0) return;
+    if (contentRef.current) {
+      scrollRef.current[activeTab] = contentRef.current.scrollTop;
+    }
+    loadedRef.current.clear();
+    loadTab(activeTab, true);
+  }, [refreshKey, activeTab, loadTab]);
 
   // Reset loaded cache when run changes
   useEffect(() => {

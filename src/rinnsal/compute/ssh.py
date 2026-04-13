@@ -114,6 +114,7 @@ class SSHExecutor(Executor):
             "args": cloudpickle.dumps(resolved_args),
             "kwargs": cloudpickle.dumps(resolved_kwargs),
             "capture": self._capture,
+            "task_name": expr.task_name or "",
         }
 
         serialized_payload = cloudpickle.dumps(payload)
@@ -196,14 +197,16 @@ func = cloudpickle.loads(payload["func"])
 args = cloudpickle.loads(payload["args"])
 kwargs = cloudpickle.loads(payload["kwargs"])
 capture = payload["capture"]
+task_name = payload.get("task_name", "")
 
 # Set up logger proxy — streams events to real stderr in real-time
 from rinnsal.data.logger.proxy import LoggerProxy
-from rinnsal.context import Card, current
+from rinnsal.context import current
 
 proxy = LoggerProxy(stream=sys.stderr.buffer)
 current._set_logger(proxy)
-current._set_card(Card())
+if task_name:
+    current._set_task_name(task_name)
 
 stdout_capture = io.StringIO()
 stderr_capture = io.StringIO()
@@ -215,24 +218,20 @@ try:
     else:
         result = func(*args, **kwargs)
 
-    card = current._reset()
     output = {{
         "success": True,
         "result": cloudpickle.dumps(result),
         "stdout": stdout_capture.getvalue(),
         "stderr": stderr_capture.getvalue(),
         "error": None,
-        "card": card.serialize() if card else None,
     }}
 except Exception as e:
-    current._reset()
     output = {{
         "success": False,
         "result": None,
         "stdout": stdout_capture.getvalue(),
         "stderr": stderr_capture.getvalue(),
         "error": cloudpickle.dumps(e),
-        "card": None,
     }}
 finally:
     current._reset_logger()
@@ -390,7 +389,6 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
                         stdout=output["stdout"],
                         stderr=output["stderr"] + plain_stderr,
                         success=True,
-                        card=output.get("card"),
                     )
                 else:
                     return ExecutionResult(
@@ -403,7 +401,6 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
                             if output["error"]
                             else None
                         ),
-                        card=output.get("card"),
                     )
             except Exception as e:
                 return ExecutionResult(
@@ -508,6 +505,7 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
 def _make_persistent_worker_script(
     job_dir: str,
     checkpoint_path: str | None = None,
+    task_name: str = "",
 ) -> str:
     """Generate a self-contained worker script for persistent execution."""
     checkpoint_block = ""
@@ -518,6 +516,11 @@ from pathlib import Path as _Path
 from rinnsal.context import Checkpoint
 current._set_checkpoint(Checkpoint(path=_Path("{checkpoint_path}")))
 """
+
+    task_name_block = ""
+    if task_name:
+        escaped = task_name.replace('"', '\\"')
+        task_name_block = f'current._set_task_name("{escaped}")\n'
 
     return f'''#!/usr/bin/env python3
 """Auto-generated rinnsal persistent SSH worker."""
@@ -535,13 +538,12 @@ DONE = JOB_DIR / ".done"
 
 import cloudpickle
 from rinnsal.data.logger.proxy import LoggerProxy
-from rinnsal.context import Card, current
+from rinnsal.context import current
 
 # Logger writes directly to events.pb (flushed per event)
 proxy = LoggerProxy(event_file=str(EVENTS))
 current._set_logger(proxy)
-current._set_card(Card())
-
+{task_name_block}
 {checkpoint_block}
 
 # Load submission
@@ -556,17 +558,12 @@ try:
     from contextlib import redirect_stdout, redirect_stderr
     with redirect_stdout(_stdout_log), redirect_stderr(_stderr_log):
         result = func(*args, **kwargs)
-    _card = current._reset()
     with open(RESULT, "wb") as _f:
-        cloudpickle.dump((
-            "success", result, None,
-            _card.serialize() if _card else None,
-        ), _f)
+        cloudpickle.dump(("success", result, None), _f)
 except Exception as e:
-    current._reset()
     tb = traceback.format_exc()
     with open(RESULT, "wb") as _f:
-        cloudpickle.dump(("error", e, tb, None), _f)
+        cloudpickle.dump(("error", e, tb), _f)
 finally:
     current._reset_logger()
     proxy.flush()
@@ -720,6 +717,7 @@ class PersistentSSHExecutor(SSHExecutor):
                 worker_script = _make_persistent_worker_script(
                     job_dir=job_dir,
                     checkpoint_path=self._checkpoint_path,
+                    task_name=expr.task_name or "",
                 )
                 async with sftp.open(f"{job_dir}/worker.py", "w") as f:
                     await f.write(worker_script)
@@ -902,16 +900,13 @@ class PersistentSSHExecutor(SSHExecutor):
 
             outcome = cloudpickle.loads(result_bytes)
 
-            # Tuple: ("success"|"error", result|error, None|tb, card)
-            card = outcome[3] if len(outcome) > 3 else None
-
+            # Tuple: ("success"|"error", result|error, None|tb)
             if outcome[0] == "success":
                 return ExecutionResult(
                     value=outcome[1],
                     stdout=stdout,
                     stderr=stderr,
                     success=True,
-                    card=card,
                 )
             else:
                 return ExecutionResult(
@@ -920,7 +915,6 @@ class PersistentSSHExecutor(SSHExecutor):
                     stderr=stderr + (outcome[2] or ""),
                     success=False,
                     error=outcome[1],
-                    card=card,
                 )
 
     def shutdown(self, wait: bool = True) -> None:

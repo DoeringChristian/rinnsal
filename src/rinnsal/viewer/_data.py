@@ -12,6 +12,78 @@ from rinnsal.data.logger.logger import EVENTS_FILE, MARKER_FILE
 DEFAULT_MAX_POINTS = 1000
 
 
+def _resolve_blob_root(log_path: Path) -> Path | None:
+    """Walk up from a run dir to find the FileDatabase root.
+
+    Layout produced by ``LocalRunStore``:
+        <db_root>/flows/<flow_name>/runs/<run_id>/events.pb
+    Returns the directory that contains a ``blobs/`` subdirectory, or
+    ``None`` if none is found within four levels.
+    """
+    cur = log_path.resolve()
+    for _ in range(5):
+        if (cur / "blobs").is_dir():
+            return cur
+        if cur == cur.parent:
+            break
+        cur = cur.parent
+    return None
+
+
+def _card_component_to_dict(cc: Any) -> dict[str, Any]:
+    """Convert a CardComponent proto into a JSON-friendly dict.
+
+    Heavy payloads (image bytes, plotly JSON, pickled data) are NOT
+    inlined here — only their hashes / sizes / metadata. The viewer
+    fetches blobs lazily via the ``/api/blob`` endpoint.
+    """
+    import base64
+
+    kind = cc.WhichOneof("data")
+    out: dict[str, Any] = {"kind": kind, "tag": cc.tag}
+    if kind == "scalar":
+        out["value"] = cc.scalar.value
+    elif kind == "text":
+        out["content"] = cc.text.value
+    elif kind == "markdown":
+        out["content"] = cc.markdown.content
+    elif kind == "table":
+        out["headers_json"] = cc.table.headers_json
+        out["rows_json"] = cc.table.rows_json
+    elif kind == "code":
+        out["source"] = cc.code.source
+        out["language"] = cc.code.language
+    elif kind == "progress":
+        out["value"] = cc.progress.value
+        out["total"] = cc.progress.total
+        out["label"] = cc.progress.label
+    elif kind == "image":
+        out["width"] = cc.image.width
+        out["height"] = cc.image.height
+        out["blob_hash"] = cc.image.blob_hash
+        if not cc.image.blob_hash and cc.image.data:
+            out["inline_b64"] = base64.b64encode(bytes(cc.image.data)).decode()
+    elif kind == "figure":
+        out["interactive"] = cc.figure.interactive
+        out["format"] = cc.figure.format or "matplotlib"
+        out["image_blob_hash"] = cc.figure.image_blob_hash
+        if not cc.figure.image_blob_hash and cc.figure.image:
+            out["inline_b64"] = base64.b64encode(bytes(cc.figure.image)).decode()
+    elif kind == "plotly":
+        out["title"] = cc.plotly.title
+        out["n_traces"] = cc.plotly.n_traces
+        out["blob_hash"] = cc.plotly.blob_hash
+        out["png_blob_hash"] = cc.plotly.png_blob_hash
+        if not cc.plotly.blob_hash and cc.plotly.inline_json:
+            out["inline_json"] = cc.plotly.inline_json
+    elif kind == "artifact":
+        # Artifact component (Checkpoint proto + description / type_name)
+        out["description"] = cc.artifact.description
+        out["type_name"] = cc.artifact.type_name
+        out["blob_hash"] = cc.artifact.blob_hash
+    return out
+
+
 def lttb_downsample(
     data: list[tuple[int, float]], threshold: int
 ) -> list[tuple[int, float]]:
@@ -77,23 +149,53 @@ class RunCache:
         "text",
         "figures",
         "images",
+        "markdown",
+        "tables",
+        "code",
+        "progress",
+        "plotly",
+        "cards",
         "task_nodes",
         "task_edges",
         "file_mtime",
         "file_size",
+        "blob_root",
     )
 
     def __init__(self) -> None:
         self.scalars: dict[str, list[tuple[int, float, float | None]]] = {}
         self.text: dict[str, list[tuple[int, str]]] = {}
-        self.figures: dict[str, list[tuple[int, bytes, bytes, bool]]] = {}
-        self.images: dict[str, list[tuple[int, bytes, int, int]]] = {}  # tag → [(it, png_bytes, w, h)]
+        # tag → [(it, image_bytes, image_blob_hash, data_bytes, data_blob_hash, interactive, format)]
+        self.figures: dict[
+            str,
+            list[tuple[int, bytes, str, bytes, str, bool, str]],
+        ] = {}
+        # tag → [(it, png_bytes, blob_hash, w, h)]
+        self.images: dict[str, list[tuple[int, bytes, str, int, int]]] = {}
+        self.markdown: dict[str, list[tuple[int, str]]] = {}
+        # tag → [(it, headers_json, rows_json)]
+        self.tables: dict[str, list[tuple[int, str, str]]] = {}
+        # tag → [(it, source, language)]
+        self.code: dict[str, list[tuple[int, str, str]]] = {}
+        # tag → [(it, value, total, label)]
+        self.progress: dict[str, list[tuple[int, float, float, str]]] = {}
+        # tag → [(it, inline_json, blob_hash, png_blob_hash, n_traces, title)]
+        self.plotly: dict[
+            str,
+            list[tuple[int, str, str, str, int, str]],
+        ] = {}
+        # (task, name) → [(it, [CardComponent serialized as dict])]
+        self.cards: dict[tuple[str, str], list[tuple[int, list[dict]]]] = {}
         # List of (task_name, task_hash, status, duration, error, timestamp, params)
         self.task_nodes: list[tuple[str, str, str, float, str, float, str]] = []
         # List of (from_task, to_task)
         self.task_edges: list[tuple[str, str]] = []
         self.file_mtime: float = 0.0
         self.file_size: int = 0
+        # Path to the FileDatabase root (containing blobs/) for content-
+        # addressed payloads. Set by get_cache() when the run dir lives
+        # under a recognized .rinnsal layout.
+        self.blob_root: Path | None = None
 
     def load(self, events_path: Path) -> None:
         """Single-pass read of events.pb, populating all caches."""
@@ -107,6 +209,12 @@ class RunCache:
         self.text.clear()
         self.figures.clear()
         self.images.clear()
+        self.markdown.clear()
+        self.tables.clear()
+        self.code.clear()
+        self.progress.clear()
+        self.plotly.clear()
+        self.cards.clear()
         self.task_nodes.clear()
         self.task_edges.clear()
 
@@ -140,8 +248,11 @@ class RunCache:
                     (
                         it,
                         bytes(event.figure.image),
+                        event.figure.image_blob_hash,
                         bytes(event.figure.data),
+                        event.figure.data_blob_hash,
                         event.figure.interactive,
+                        event.figure.format or "matplotlib",
                     )
                 )
 
@@ -153,10 +264,59 @@ class RunCache:
                     (
                         it,
                         bytes(event.image.data),
+                        event.image.blob_hash,
                         event.image.width,
                         event.image.height,
                     )
                 )
+
+            elif data_type == "markdown":
+                tag = event.markdown.tag
+                self.markdown.setdefault(tag, []).append(
+                    (it, event.markdown.content)
+                )
+
+            elif data_type == "table":
+                tag = event.table.tag
+                self.tables.setdefault(tag, []).append(
+                    (it, event.table.headers_json, event.table.rows_json)
+                )
+
+            elif data_type == "code":
+                tag = event.code.tag
+                self.code.setdefault(tag, []).append(
+                    (it, event.code.source, event.code.language)
+                )
+
+            elif data_type == "progress":
+                tag = event.progress.tag
+                self.progress.setdefault(tag, []).append(
+                    (
+                        it,
+                        event.progress.value,
+                        event.progress.total,
+                        event.progress.label,
+                    )
+                )
+
+            elif data_type == "plotly":
+                tag = event.plotly.tag
+                self.plotly.setdefault(tag, []).append(
+                    (
+                        it,
+                        event.plotly.inline_json,
+                        event.plotly.blob_hash,
+                        event.plotly.png_blob_hash,
+                        event.plotly.n_traces,
+                        event.plotly.title,
+                    )
+                )
+
+            elif data_type == "card_event":
+                ce = event.card_event
+                key = (ce.task, ce.name)
+                components = [_card_component_to_dict(cc) for cc in ce.components]
+                self.cards.setdefault(key, []).append((it, components))
 
             elif data_type == "task_node":
                 tn = event.task_node
@@ -177,14 +337,60 @@ class RunCache:
                 self.task_edges.append((te.from_task, te.to_task))
 
         # Sort all by iteration
-        for tag in self.scalars:
-            self.scalars[tag].sort(key=lambda x: x[0])
-        for tag in self.text:
-            self.text[tag].sort(key=lambda x: x[0])
-        for tag in self.figures:
-            self.figures[tag].sort(key=lambda x: x[0])
-        for tag in self.images:
-            self.images[tag].sort(key=lambda x: x[0])
+        for d in (
+            self.scalars,
+            self.text,
+            self.figures,
+            self.images,
+            self.markdown,
+            self.tables,
+            self.code,
+            self.progress,
+            self.plotly,
+        ):
+            for tag in d:
+                d[tag].sort(key=lambda x: x[0])
+        for key in self.cards:
+            self.cards[key].sort(key=lambda x: x[0])
+
+    def tags(self) -> list[dict[str, Any]]:
+        """Return a unified listing of every (tag, kind) in the run.
+
+        Used by the viewer's Tags section. Each entry includes the list
+        of iterations the tag was emitted at.
+        """
+        out: list[dict[str, Any]] = []
+        for kind, store in (
+            ("scalar", self.scalars),
+            ("text", self.text),
+            ("figure", self.figures),
+            ("image", self.images),
+            ("markdown", self.markdown),
+            ("table", self.tables),
+            ("code", self.code),
+            ("progress", self.progress),
+            ("plotly", self.plotly),
+        ):
+            for tag, entries in store.items():
+                out.append(
+                    {
+                        "tag": tag,
+                        "kind": kind,
+                        "iterations": [e[0] for e in entries],
+                        "count": len(entries),
+                    }
+                )
+        return out
+
+    def get_blob(self, blob_hash: str) -> bytes | None:
+        """Resolve a content-addressed blob from the run's FileDatabase root."""
+        if not blob_hash or self.blob_root is None:
+            return None
+        path = self.blob_root / "blobs" / blob_hash[:2] / blob_hash[2:4] / blob_hash[4:]
+        try:
+            return path.read_bytes()
+        except OSError:
+            return None
 
     def is_stale(self, events_path: Path) -> bool:
         """Check if the file has changed since we last loaded."""
@@ -211,6 +417,7 @@ def get_cache(log_path: Path) -> RunCache:
         return cache
 
     cache = RunCache()
+    cache.blob_root = _resolve_blob_root(log_path)
     if events_path.exists():
         try:
             cache.load(events_path)

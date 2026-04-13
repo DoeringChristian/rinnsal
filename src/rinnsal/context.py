@@ -1,117 +1,10 @@
-"""Task execution context with card and checkpoint support."""
+"""Task execution context: logger, checkpoint, current task name."""
 
 from __future__ import annotations
 
-import base64
-import io
 from contextvars import ContextVar
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-
-
-@dataclass
-class CardItem:
-    """A single item in a task card."""
-
-    kind: str  # "text", "image", "html", "table"
-    content: Any
-    title: str = ""
-
-
-
-
-def _normalize_table(
-    data: Any, headers: list[str] | None = None
-) -> dict[str, Any]:
-    """Normalize table data to a serializable dict."""
-    # Handle pandas DataFrame
-    if hasattr(data, "to_dict") and hasattr(data, "columns"):
-        return {
-            "headers": list(data.columns),
-            "rows": data.values.tolist(),
-        }
-    # list-of-lists
-    rows = [list(row) for row in data]
-    return {"headers": headers, "rows": rows}
-
-
-def _render_image_bytes(figure: Any) -> bytes:
-    """Render a matplotlib figure to PNG bytes."""
-    buf = io.BytesIO()
-    figure.savefig(buf, format="png", bbox_inches="tight")
-    buf.seek(0)
-    return buf.read()
-
-
-class Card:
-    """Collects rich content for a task card."""
-
-    def __init__(self) -> None:
-        self._items: list[CardItem] = []
-
-    def _log_to_logger(
-        self, kind: str, title: str, content: str = "", image: bytes = b""
-    ) -> None:
-        """Log card item to the current logger if available.
-
-        Note: This is currently disabled because card logging is handled
-        by the engine after task completion, which works with all executors.
-        Keeping this method for potential future use with streaming logs.
-        """
-        # Card logging is now handled by the engine after task completion
-        # to ensure it works with all executors (inline, subprocess, etc.)
-        pass
-
-    def text(self, content: str, title: str = "") -> None:
-        """Add a text/markdown block."""
-        self._items.append(CardItem(kind="text", content=content, title=title))
-        self._log_to_logger("text", title, content=content)
-
-    def image(self, figure: Any, title: str = "") -> None:
-        """Add a matplotlib figure (rendered to PNG immediately)."""
-        png_bytes = _render_image_bytes(figure)
-        b64_content = base64.b64encode(png_bytes).decode("ascii")
-        self._items.append(CardItem(kind="image", content=b64_content, title=title))
-        self._log_to_logger("image", title, image=png_bytes)
-
-    def html(self, content: str, title: str = "") -> None:
-        """Add raw HTML content."""
-        self._items.append(CardItem(kind="html", content=content, title=title))
-        self._log_to_logger("html", title, content=content)
-
-    def table(
-        self,
-        data: Any,
-        title: str = "",
-        headers: list[str] | None = None,
-    ) -> None:
-        """Add a table (list-of-lists or pandas DataFrame)."""
-        table_data = _normalize_table(data, headers)
-        self._items.append(
-            CardItem(
-                kind="table",
-                content=table_data,
-                title=title,
-            )
-        )
-        # Log table as markdown text
-        import json
-        self._log_to_logger("table", title, content=json.dumps(table_data))
-
-    @property
-    def items(self) -> list[CardItem]:
-        return list(self._items)
-
-    def is_empty(self) -> bool:
-        return len(self._items) == 0
-
-    def serialize(self) -> list[dict[str, Any]]:
-        """Serialize card items for storage in Entry metadata."""
-        return [
-            {"kind": item.kind, "content": item.content, "title": item.title}
-            for item in self._items
-        ]
 
 
 class Checkpoint:
@@ -154,29 +47,18 @@ class Checkpoint:
 
 
 class _Current:
-    """Context-aware object for accessing task execution context.
+    """Context-aware accessor for the active task's logger, checkpoint, and name.
 
-    Provides ``current.card`` for rich content,
-    ``current.checkpoint`` for resumable execution, and
-    ``current.logger`` for event logging.
-    Uses ContextVar for thread/process safety.
+    Cards are no longer a separate context construct. Use
+    ``current.logger.card("name")`` to compose a card through the unified
+    Logger API; see :mod:`rinnsal.data.logger.card`.
     """
 
-    _card_var: ContextVar[Card | None] = ContextVar("_card_var", default=None)
     _checkpoint_var: ContextVar[Checkpoint | None] = ContextVar(
         "_checkpoint_var", default=None
     )
     _logger_var: ContextVar[Any] = ContextVar("_logger_var", default=None)
     _task_name_var: ContextVar[str] = ContextVar("_task_name_var", default="")
-
-    @property
-    def card(self) -> Card:
-        """Get or create the card for the current task."""
-        c = self._card_var.get(None)
-        if c is None:
-            c = Card()
-            self._card_var.set(c)
-        return c
 
     @property
     def checkpoint(self) -> Checkpoint:
@@ -200,40 +82,19 @@ class _Current:
         """Get the name of the currently executing task."""
         return self._task_name_var.get("")
 
-    def _set_card(self, card: Card) -> None:
-        """Set the card for the current task (called by executors)."""
-        self._card_var.set(card)
-
     def _set_checkpoint(self, checkpoint: Checkpoint) -> None:
-        """Set the checkpoint for the current task (called by executors)."""
         self._checkpoint_var.set(checkpoint)
 
     def _set_logger(self, logger: Any) -> None:
-        """Set the logger for the current flow (called by flow.run)."""
         self._logger_var.set(logger)
 
     def _set_task_name(self, name: str) -> None:
-        """Set the current task name (called by executors)."""
         self._task_name_var.set(name)
 
-    def _reset(self) -> Card | None:
-        """Harvest and clear the card (called by executors after task completes).
-
-        Note: checkpoint is NOT cleared here — it persists across retries
-        so a retry attempt can read the checkpoint from the previous attempt.
-        """
-        c = self._card_var.get(None)
-        self._card_var.set(None)
-        if c is not None and c.is_empty():
-            return None
-        return c
-
     def _reset_checkpoint(self) -> None:
-        """Clear the checkpoint context (called after all retries complete)."""
         self._checkpoint_var.set(None)
 
     def _reset_logger(self) -> None:
-        """Clear the logger context (called after flow completes)."""
         self._logger_var.set(None)
 
 

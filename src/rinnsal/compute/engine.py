@@ -236,7 +236,7 @@ class ExecutionEngine:
             # Execute the task
             _task_t0 = datetime.now()
             try:
-                result, log, card = self._execute_with_retry(
+                result, log = self._execute_with_retry(
                     expr, resolved_args, resolved_kwargs,
                     checkpoint_path=checkpoint_path,
                 )
@@ -274,8 +274,6 @@ class ExecutionEngine:
                 }
                 if expr.task_def.resources:
                     metadata["resources"] = expr.task_def.resources.as_dict()
-                if card:
-                    metadata["card"] = card
 
                 # Look up snapshot (cached, so this is a no-op if already created)
                 snapshot_obj = None
@@ -413,43 +411,6 @@ class ExecutionEngine:
                         str(result.error),
                     )
 
-            # Log cards to current.logger (set by flow.run)
-            if result.success and result.card:
-                from rinnsal.context import current as _ctx
-                ctx_logger = _ctx.logger
-                if ctx_logger is not None:
-                    import base64
-                    import json
-                    for card_item in result.card:
-                        kind = card_item.get("kind", "text")
-                        title = card_item.get("title", "")
-                        content = card_item.get("content", "")
-                        image = b""
-
-                        # Handle different content types
-                        if kind == "image":
-                            # Content is base64-encoded PNG
-                            if isinstance(content, str):
-                                try:
-                                    image = base64.b64decode(content)
-                                except Exception:
-                                    pass
-                            content = ""
-                        elif kind == "table":
-                            # Content is a dict, serialize to JSON
-                            if isinstance(content, dict):
-                                content = json.dumps(content)
-                        elif not isinstance(content, str):
-                            content = str(content)
-
-                        ctx_logger.add_card(
-                            task=expr.task_name,
-                            kind=kind,
-                            title=title,
-                            content=content,
-                            image=image,
-                        )
-
             # Replay logger events collected by LoggerProxy in the worker.
             # This covers add_scalar, add_figure, etc. called by user
             # code inside the task function on any remote executor.
@@ -461,7 +422,7 @@ class ExecutionEngine:
                     replay_events(_replay_logger, result.logger_events)
 
             if result.success:
-                return result.value, combined_log, result.card
+                return result.value, combined_log
 
             # Flush captured output immediately on failure
             if attempt_log:
@@ -480,7 +441,7 @@ class ExecutionEngine:
         if expr.task_def.catch_enabled:
             catch_val = expr.task_def.catch
             default = None if catch_val is True else catch_val
-            return default, combined_log, None
+            return default, combined_log
 
         if last_error is not None:
             raise last_error

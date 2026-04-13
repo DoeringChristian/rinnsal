@@ -50,10 +50,12 @@ class FileDatabase(BaseDatabase):
         self._tasks_dir = self._root / "tasks"
         self._flows_dir = self._root / "flows"
         self._snapshots_dir = self._root / "snapshots"
+        self._blobs_dir = self._root / "blobs"
 
         self._tasks_dir.mkdir(parents=True, exist_ok=True)
         self._flows_dir.mkdir(parents=True, exist_ok=True)
         self._snapshots_dir.mkdir(parents=True, exist_ok=True)
+        self._blobs_dir.mkdir(parents=True, exist_ok=True)
 
         # Cache: task_hash -> resolved directory Path
         self._task_dir_cache: dict[str, Path] = {}
@@ -315,6 +317,38 @@ class FileDatabase(BaseDatabase):
             hash=data["hash"],
             path=Path(data["path"]),
         )
+
+    def _blob_path(self, blob_hash: str) -> Path:
+        return self._blobs_dir / blob_hash[:2] / blob_hash[2:4] / blob_hash[4:]
+
+    def put_blob(self, data: bytes) -> str:
+        import hashlib
+
+        blob_hash = hashlib.sha256(data).hexdigest()
+        dest = self._blob_path(blob_hash)
+        if dest.exists():
+            return blob_hash
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(f".tmp.{uuid.uuid4().hex}")
+        tmp.write_bytes(data)
+        try:
+            os.replace(tmp, dest)
+        except OSError:
+            # Another writer won the race; remove our temp file.
+            try:
+                tmp.unlink()
+            except FileNotFoundError:
+                pass
+        return blob_hash
+
+    def get_blob(self, blob_hash: str) -> bytes:
+        path = self._blob_path(blob_hash)
+        if not path.exists():
+            raise FileNotFoundError(f"blob {blob_hash} not found at {path}")
+        return path.read_bytes()
+
+    def blob_exists(self, blob_hash: str) -> bool:
+        return self._blob_path(blob_hash).exists()
 
 
 # Default database instance

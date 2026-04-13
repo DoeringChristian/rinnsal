@@ -120,6 +120,22 @@ class Database(Protocol):
         """Clear all stored data."""
         ...
 
+    def put_blob(self, data: bytes) -> str:
+        """Store a binary blob content-addressed by sha256.
+
+        Returns the blob hash. Idempotent: repeated puts of identical content
+        return the same hash without rewriting.
+        """
+        ...
+
+    def get_blob(self, blob_hash: str) -> bytes:
+        """Retrieve a blob by hash. Raises FileNotFoundError if missing."""
+        ...
+
+    def blob_exists(self, blob_hash: str) -> bool:
+        """Return True if a blob with this hash is stored."""
+        ...
+
 
 class BaseDatabase(ABC):
     """Abstract base class implementing the Database protocol.
@@ -175,6 +191,15 @@ class BaseDatabase(ABC):
     @abstractmethod
     def clear(self) -> None: ...
 
+    def put_blob(self, data: bytes) -> str:
+        raise NotImplementedError
+
+    def get_blob(self, blob_hash: str) -> bytes:
+        raise NotImplementedError
+
+    def blob_exists(self, blob_hash: str) -> bool:
+        raise NotImplementedError
+
 
 class InMemoryDatabase(BaseDatabase):
     """In-memory database for testing purposes.
@@ -186,6 +211,7 @@ class InMemoryDatabase(BaseDatabase):
         self._task_results: dict[str, list[Entry]] = {}
         self._flow_runs: dict[str, list[dict[str, Any]]] = {}
         self._run_counter = 0
+        self._blobs: dict[str, bytes] = {}
 
     def _key(self, task_hash: str, task_name: str) -> str:
         return f"{task_name}-{task_hash}" if task_name else task_hash
@@ -272,3 +298,20 @@ class InMemoryDatabase(BaseDatabase):
         self._task_results.clear()
         self._flow_runs.clear()
         self._run_counter = 0
+        self._blobs.clear()
+
+    def put_blob(self, data: bytes) -> str:
+        import hashlib
+
+        h = hashlib.sha256(data).hexdigest()
+        self._blobs.setdefault(h, data)
+        return h
+
+    def get_blob(self, blob_hash: str) -> bytes:
+        try:
+            return self._blobs[blob_hash]
+        except KeyError as e:
+            raise FileNotFoundError(f"blob {blob_hash}") from e
+
+    def blob_exists(self, blob_hash: str) -> bool:
+        return blob_hash in self._blobs

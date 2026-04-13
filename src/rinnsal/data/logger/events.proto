@@ -11,15 +11,24 @@ message Event {
   double timestamp = 1;
   int64 iteration = 2;
 
+  reserved 7;
+  reserved "card";
+
   oneof data {
     Scalar scalar = 3;
     Text text = 4;
     Figure figure = 5;
     Checkpoint checkpoint = 6;
-    Card card = 7;
+    // tag 7 reserved (was the legacy Card message)
     Image image = 8;
     TaskNode task_node = 9;
     TaskEdge task_edge = 10;
+    Markdown markdown = 11;
+    Table table = 12;
+    Code code = 13;
+    Progress progress = 14;
+    Plotly plotly = 15;
+    CardEvent card_event = 16;
   }
 }
 
@@ -36,41 +45,97 @@ message Text {
 message Figure {
   string tag = 1;
   bool interactive = 2;
-  bytes image = 3;   // PNG bytes (non-interactive)
-  bytes data = 4;    // cloudpickle bytes (interactive)
+  bytes image = 3;                // PNG bytes (inline path)
+  bytes data = 4;                 // cloudpickle bytes (interactive, inline)
+  string format = 5;              // "matplotlib" (default) | "png"
+  string image_blob_hash = 6;     // heavy path: PNG stored in blob store
+  string data_blob_hash = 7;      // heavy path: pickled figure in blob store
 }
 
 message Checkpoint {
   string tag = 1;
-  bytes data = 2;
-}
-
-message Card {
-  string task = 1;           // Task name that produced this card
-  string kind = 2;           // text, image, table, html
-  string title = 3;          // Optional title
-  string content = 4;        // Text/HTML/markdown content
-  bytes image = 5;           // PNG bytes for image cards
+  bytes data = 2;                 // cloudpickle bytes (inline path)
+  string blob_hash = 3;           // heavy path: pickled object in blob store
+  string description = 4;         // Artifact-only: human description
+  string type_name = 5;           // Artifact-only: repr(type(obj).__name__)
 }
 
 message Image {
   string tag = 1;
-  bytes data = 2;            // PNG-encoded bytes
+  bytes data = 2;                 // PNG-encoded bytes (inline path)
   int32 width = 3;
   int32 height = 4;
-  string format = 5;         // "png", "jpeg", etc.
+  string format = 5;              // "png", "jpeg", etc.
+  string blob_hash = 6;           // heavy path: PNG stored in blob store
 }
 
 message TaskNode {
-  string task_name = 1;      // stable identity key across runs
-  string task_hash = 2;      // specific invocation hash
-  string status = 3;         // "success" | "failed" | "cached" | "running"
-  double duration = 4;       // elapsed seconds
-  string error = 5;          // error message (when failed)
-  string params = 6;         // JSON-encoded task parameters
+  string task_name = 1;
+  string task_hash = 2;
+  string status = 3;
+  double duration = 4;
+  string error = 5;
+  string params = 6;
 }
 
 message TaskEdge {
-  string from_task = 1;      // dependency task_name
-  string to_task = 2;        // dependent task_name
+  string from_task = 1;
+  string to_task = 2;
+}
+
+message Markdown {
+  string tag = 1;
+  string content = 2;
+}
+
+message Table {
+  string tag = 1;
+  string headers_json = 2;        // JSON-encoded list[str]; may be empty
+  string rows_json = 3;           // JSON-encoded list[list[Any]]
+}
+
+message Code {
+  string tag = 1;
+  string source = 2;
+  string language = 3;            // "python", "bash", ...
+}
+
+message Progress {
+  string tag = 1;
+  double value = 2;
+  double total = 3;
+  string label = 4;
+}
+
+message Plotly {
+  string tag = 1;
+  string blob_hash = 2;           // blob containing plotly figure JSON
+  string inline_json = 3;         // fallback when no blob store available
+  string png_blob_hash = 4;       // PNG fallback blob (orchestrator-side render)
+  int32 n_traces = 5;
+  string title = 6;
+}
+
+// A user-composed card: named grouping of components emitted at one iteration.
+// Cards re-emitted across iterations share the same (task, name) key.
+message CardEvent {
+  string name = 1;                // user-chosen card id
+  string task = 2;                // task_name at emission time (may be empty)
+  repeated CardComponent components = 3;
+}
+
+message CardComponent {
+  string tag = 1;                 // optional; usually empty inside a card
+  oneof data {
+    Scalar scalar = 2;
+    Text text = 3;
+    Figure figure = 4;
+    Image image = 5;
+    Markdown markdown = 6;
+    Table table = 7;
+    Code code = 8;
+    Progress progress = 9;
+    Checkpoint artifact = 10;     // reuses Checkpoint proto; Artifact sets description
+    Plotly plotly = 11;
+  }
 }

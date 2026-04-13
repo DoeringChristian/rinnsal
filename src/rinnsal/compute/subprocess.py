@@ -77,7 +77,7 @@ def _worker_execute(
     checkpoint_path: str | None = None,
     event_file: str | None = None,
     task_name: str = "",
-) -> tuple[bool, Any, str, str, bytes | None, list[dict] | None, bytes]:
+) -> tuple[bool, Any, str, str, bytes | None, bytes]:
     """Worker function that runs in a subprocess.
 
     Returns:
@@ -100,10 +100,14 @@ def _worker_execute(
     args = cloudpickle.loads(serialized_args)
     kwargs = cloudpickle.loads(serialized_kwargs)
 
-    from rinnsal.context import Card, Checkpoint, current
+    from rinnsal.context import Checkpoint, current
     from rinnsal.data.logger.proxy import LoggerProxy
 
-    current._set_card(Card())
+    # Propagate the task name into the worker's context so user code
+    # (e.g. Logger.card()) can see ``current.task_name``.
+    if task_name:
+        current._set_task_name(task_name)
+
     # When event_file is provided, events are written directly to the
     # flow's events.pb (flushed per event) so the viewer can show live
     # data.  Otherwise fall back to buffer mode (replayed after task).
@@ -143,20 +147,17 @@ def _worker_execute(
         else:
             result = func(*args, **kwargs)
 
-        card = current._reset()
         return (
             True,
             cloudpickle.dumps(result),
             stdout_capture.getvalue(),
             stderr_capture.getvalue(),
             None,
-            card.serialize() if card else None,
             proxy.get_buffer(),
         )
     except Exception as e:
         import traceback
 
-        current._reset()
         tb = traceback.format_exception(e)
         stderr_val = stderr_capture.getvalue()
         stderr_val += "".join(tb)
@@ -166,7 +167,6 @@ def _worker_execute(
             stdout_capture.getvalue(),
             stderr_val,
             cloudpickle.dumps(e),
-            None,
             proxy.get_buffer(),
         )
     finally:
@@ -252,7 +252,7 @@ class SubprocessExecutor(Executor):
         try:
             (
                 success, result_bytes, stdout, stderr,
-                error_bytes, card, logger_events,
+                error_bytes, logger_events,
             ) = f.result()
 
             if success:
@@ -263,7 +263,6 @@ class SubprocessExecutor(Executor):
                         stdout=stdout,
                         stderr=stderr,
                         success=True,
-                        card=card,
                         logger_events=logger_events,
                     )
                 )

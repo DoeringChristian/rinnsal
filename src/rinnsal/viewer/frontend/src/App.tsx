@@ -334,6 +334,7 @@ export default function App() {
             onBack={() => setActiveRunIdx(-1)}
             compareGroups={groups}
             onAddToCompare={addToGroup}
+            refreshKey={refreshKey}
           />
         ) : (
           <div className="flex-1 overflow-auto relative">

@@ -74,13 +74,89 @@ export function imageUrl(runPath: string, tag: string, it: number): string {
   return `/api/image/${encodeURIComponent(runPath)}?tag=${encodeURIComponent(tag)}&it=${it}`;
 }
 
-/** Card data: {task: [{it, kind, title, content, image?}, ...]} */
-export type CardData = Record<string, { it: number; kind: string; title: string; content: string; image?: string }[]>;
+/** A user-composed card from the unified Logger+Cards system. */
+export interface CardIndexEntry {
+  name: string;
+  task: string;
+  iterations: number[];
+  component_kinds: string[];
+}
 
-export async function fetchCards(runPath: string): Promise<CardData> {
+/** A single component inside a card snapshot. Heavy payloads carry a
+ *  ``blob_hash`` field; fetch via ``blobUrl(runPath, hash)``. */
+export interface CardComponentPayload {
+  kind: string;
+  tag: string;
+  // Per-kind fields (all optional; presence depends on `kind`):
+  value?: number;
+  total?: number;
+  label?: string;
+  content?: string;
+  source?: string;
+  language?: string;
+  headers_json?: string;
+  rows_json?: string;
+  width?: number;
+  height?: number;
+  inline_b64?: string;       // image / figure inline PNG, base64
+  blob_hash?: string;        // image / artifact / plotly inline JSON
+  image_blob_hash?: string;  // matplotlib figure
+  png_blob_hash?: string;    // plotly PNG fallback
+  inline_json?: string;      // plotly JSON when inline
+  format?: string;           // figure: "matplotlib"
+  interactive?: boolean;     // figure
+  title?: string;            // plotly
+  n_traces?: number;         // plotly
+  description?: string;      // artifact
+  type_name?: string;        // artifact
+}
+
+export interface CardSnapshot {
+  name: string;
+  task: string;
+  it: number | null;
+  components: CardComponentPayload[];
+}
+
+export async function fetchCardsIndex(runPath: string): Promise<CardIndexEntry[]> {
   const response = await fetch(`/api/cards/${encodeURIComponent(runPath)}`);
   if (!response.ok) throw new Error(`Failed to fetch cards: ${response.statusText}`);
+  const data: { cards: CardIndexEntry[] } = await response.json();
+  return data.cards;
+}
+
+export async function fetchCard(
+  runPath: string,
+  name: string,
+  task: string,
+  it?: number,
+): Promise<CardSnapshot> {
+  const params = new URLSearchParams({ name, task });
+  if (it !== undefined) params.set("it", String(it));
+  const response = await fetch(
+    `/api/card/${encodeURIComponent(runPath)}?${params.toString()}`,
+  );
+  if (!response.ok) throw new Error(`Failed to fetch card: ${response.statusText}`);
   return response.json();
+}
+
+/** Unified tag listing: every (tag, kind) emitted in a run. */
+export interface TagEntry {
+  tag: string;
+  kind: string;
+  iterations: number[];
+  count: number;
+}
+
+export async function fetchTags(runPath: string): Promise<TagEntry[]> {
+  const response = await fetch(`/api/tags/${encodeURIComponent(runPath)}`);
+  if (!response.ok) throw new Error(`Failed to fetch tags: ${response.statusText}`);
+  const data: { tags: TagEntry[] } = await response.json();
+  return data.tags;
+}
+
+export function blobUrl(runPath: string, blobHash: string): string {
+  return `/api/blob/${encodeURIComponent(runPath)}/${blobHash}`;
 }
 
 /** Task node from the flow DAG aggregated across runs. */

@@ -75,30 +75,17 @@ function saveGroups(groups: CompareGroup[]) {
 
 // ─── Slot Renderer ───────────────────────────────────────────────
 
-// Auto-incrementing tick for cache busting in compare view
-let _globalCompareTick = 0;
-
-function useRefreshTick(intervalMs = 5000): number {
-  const [tick, setTick] = useState(() => _globalCompareTick);
-  useEffect(() => {
-    const id = setInterval(() => {
-      _globalCompareTick++;
-      setTick(_globalCompareTick);
-    }, intervalMs);
-    return () => clearInterval(id);
-  }, [intervalMs]);
-  return tick;
-}
+// Polling removed: the 5-second cache-buster tick made the compare view
+// painful over SSH tunnels. Manual refresh from the sidebar covers updates.
 
 function SlotContent({ slot, it }: { slot: CompareSlot; it: number }) {
   const runName = slot.run.split("/").pop() || slot.run;
-  const tick = useRefreshTick();
 
   if (slot.type === "figure") {
-    return <img key={`fig-${tick}`} src={figureImageUrl(slot.run, slot.tag, it) + `&_v=${tick}`} alt={`${runName} / ${slot.tag} @ ${it}`} className="w-full h-auto rounded object-contain" />;
+    return <img src={figureImageUrl(slot.run, slot.tag, it)} alt={`${runName} / ${slot.tag} @ ${it}`} className="w-full h-auto rounded object-contain" />;
   }
   if (slot.type === "image") {
-    return <img key={`img-${tick}`} src={imageUrl(slot.run, slot.tag, it) + `&_v=${tick}`} alt={`${runName} / ${slot.tag} @ ${it}`} className="w-full h-auto rounded object-contain" />;
+    return <img src={imageUrl(slot.run, slot.tag, it)} alt={`${runName} / ${slot.tag} @ ${it}`} className="w-full h-auto rounded object-contain" />;
   }
   if (slot.type === "scalar") {
     return null; // Rendered in scalar panels
@@ -177,7 +164,6 @@ function DragNumberInput({ value, onChange, logScale: logDrag = false, title, pr
 /** Shows the scalar value at a given iteration. Fetches data (browser-cached). */
 function ScalarValueAt({ run, tag, it }: { run: string; tag: string; it: number }) {
   const [val, setVal] = useState<number | null>(null);
-  const tick = useRefreshTick();
   useEffect(() => {
     fetchScalars(run).then((d) => {
       const points = d[tag];
@@ -189,7 +175,7 @@ function ScalarValueAt({ run, tag, it }: { run: string; tag: string; it: number 
       }
       setVal(best.value);
     }).catch(() => {});
-  }, [run, tag, it, tick]);
+  }, [run, tag, it]);
 
   if (val === null) return <span className="text-xs text-gray-300">...</span>;
   return <span className="text-xs font-mono text-gray-600">{val.toPrecision(4)}</span>;
@@ -226,10 +212,9 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration, onSlotScaleChange }
   const slotsRef = useRef(slots);
   slotsRef.current = slots;
 
-  // Auto-refresh tick for live data
-  const refreshTick = useRefreshTick();
+  // Polling removed; manual refresh re-runs this effect via slot changes.
 
-  // Fetch data for all scalar slots (re-fetches every 5s via refreshTick)
+  // Fetch data for all scalar slots.
   useEffect(() => {
     const toFetch = new Map<string, string[]>();
     for (const s of slots) {
@@ -250,7 +235,7 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration, onSlotScaleChange }
       }
       setAllData(next);
     }).catch(() => {});
-  }, [slots.map((s) => `${s.run}\0${s.tag}`).join("\n"), refreshTick]);
+  }, [slots.map((s) => `${s.run}\0${s.tag}`).join("\n")]);
 
   // Build and render chart
   useEffect(() => {
@@ -573,12 +558,11 @@ function ScalarGroupChart({ slots, globalIt, onSetIteration, onSlotScaleChange }
 
 function TextSlotContent({ run, tag, it }: { run: string; tag: string; it: number }) {
   const [data, setData] = useState<{ it: number; value: string }[] | null>(null);
-  const tick = useRefreshTick();
   useEffect(() => {
     fetchText(run).then((d) => {
       if (d[tag]) setData(d[tag]);
     }).catch(() => {});
-  }, [run, tag, tick]);
+  }, [run, tag]);
 
   if (!data) return <div className="text-xs text-gray-400">Loading...</div>;
   const entry = data.find((d) => d.it === it) || data[data.length - 1];
@@ -613,9 +597,9 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
   const [dragPanelPid, setDragPanelPid] = useState<number | null>(null); // set when dragging a whole panel
   const { slots } = group;
 
-  // Periodically refresh iterations for figure/image slots so new
-  // data from live-running tasks appears in the compare view.
-  const refreshTick = useRefreshTick();
+  // Polling removed: fetch iteration metadata once when slot identity
+  // changes. Use the manual refresh button to pick up new iterations
+  // from a running task.
   useEffect(() => {
     const figureSlots = slots.filter((s) => s.type === "figure");
     const imageSlots = slots.filter((s) => s.type === "image");
@@ -677,7 +661,7 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
 
     refresh();
     return () => { cancelled = true; };
-  }, [refreshTick]);
+  }, [slots.map((s) => `${s.run}\0${s.tag}`).join("\n")]);
 
   const commitName = () => {
     const trimmed = editName.trim();

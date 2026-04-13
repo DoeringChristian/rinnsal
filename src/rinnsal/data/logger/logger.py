@@ -42,13 +42,21 @@ class Logger:
         logger.flush()  # Wait for all writes to complete
     """
 
-    def __init__(self, log_dir: str | Path | None = None):
+    def __init__(
+        self,
+        log_dir: str | Path | None = None,
+        database: Any = None,
+    ):
         if log_dir is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             log_dir = Path("runs") / f"run_{timestamp}"
         self._log_dir = Path(log_dir)
         self._log_dir.mkdir(parents=True, exist_ok=True)
         self._iteration = 0
+        # Optional content-addressed blob store (usually a FileDatabase).
+        # Heavy components (Plotly JSON, PNGs, pickled objects) offload
+        # to this when available, keeping events.pb small.
+        self._blob_store = database
 
         # Create marker file to identify this as a rinnsal run directory
         marker_path = self._log_dir / MARKER_FILE
@@ -101,14 +109,16 @@ class Logger:
                     self._write_figure(*args)
                 elif op == "checkpoint":
                     self._write_checkpoint(*args)
-                elif op == "card":
-                    self._write_card(*args)
                 elif op == "image":
                     self._write_image(*args)
                 elif op == "task_node":
                     self._write_task_node(*args)
                 elif op == "task_edge":
                     self._write_task_edge(*args)
+                elif op == "component":
+                    self._write_component(*args)
+                elif op == "card_event":
+                    self._write_card_event(*args)
             except Exception:
                 import traceback
                 import sys
@@ -186,15 +196,24 @@ class Logger:
     ) -> None:
         """Log a figure object.
 
-        Figures are saved using cloudpickle, preserving the full object
-        for later loading and modification.
+        Matplotlib figures follow the legacy path (PNG + optional cloudpickle).
+        Plotly figures are auto-detected and routed through the ``Plotly``
+        component (interactive JSON + optional kaleido PNG fallback).
 
         Args:
             tag: Name/tag for the figure.
-            figure: The figure object (e.g., matplotlib figure).
+            figure: The figure object (matplotlib ``Figure`` or plotly
+                ``graph_objects.Figure``).
             it: Iteration number. If None, uses current iteration.
             interactive: If True, render as interactive widget in viewer.
+                Ignored for plotly figures (always interactive).
         """
+        # Auto-detect plotly without importing plotly here.
+        if type(figure).__module__.split(".")[0] == "plotly":
+            from rinnsal.data.logger.components import Plotly
+
+            return self.add(Plotly(figure), tag=tag, it=it)
+
         if it is None:
             it = self._iteration
         ts = self._get_timestamp()
@@ -218,33 +237,6 @@ class Logger:
             it = self._iteration
         ts = self._get_timestamp()
         self._queue.put(("checkpoint", (tag, obj, it, ts)))
-
-    def add_card(
-        self,
-        task: str,
-        kind: str,
-        title: str = "",
-        content: str = "",
-        image: bytes = b"",
-        it: int | None = None,
-    ) -> None:
-        """Log a card event (rich task output).
-
-        Card events are used to display rich content from task execution
-        in the viewer.
-
-        Args:
-            task: Name of the task that produced this card.
-            kind: Type of card content (text, image, table, html).
-            title: Optional title for the card item.
-            content: Text/HTML/markdown content.
-            image: PNG bytes for image cards.
-            it: Iteration number. If None, uses current iteration.
-        """
-        if it is None:
-            it = self._iteration
-        ts = self._get_timestamp()
-        self._queue.put(("card", (task, kind, title, content, image, it, ts)))
 
     def add_task_node(
         self,
@@ -393,26 +385,6 @@ class Logger:
         event.checkpoint.CopyFrom(Checkpoint(tag=tag, data=data))
         self._event_writer.write(event)
 
-    def _write_card(
-        self,
-        task: str,
-        kind: str,
-        title: str,
-        content: str,
-        image: bytes,
-        it: int,
-        ts: float,
-    ) -> None:
-        from rinnsal.data.logger.events_pb2 import Card, Event
-
-        event = Event()
-        event.timestamp = ts
-        event.iteration = it
-        event.card.CopyFrom(
-            Card(task=task, kind=kind, title=title, content=content, image=image)
-        )
-        self._event_writer.write(event)
-
     def _write_task_node(
         self,
         task_name: str,
@@ -526,6 +498,158 @@ class Logger:
             Image(tag=tag, data=png_data, width=width, height=height, format="png")
         )
         self._event_writer.write(event)
+
+    # --------------------------------------------------------------------- #
+    # Unified component API
+    # --------------------------------------------------------------------- #
+
+    def add(self, component: Any, tag: str, it: int | None = None) -> None:
+        """Log a component (Markdown, Plotly, Table, ...) under *tag*.
+
+        The generic entry point of the unified Logger+Cards system. Every
+        ``add_scalar``/``add_figure``/etc. ends up here.
+        """
+        from rinnsal.data.logger.components import Component
+
+        if not isinstance(component, Component):
+            raise TypeError(
+                f"add() expects a Component instance, got {type(component).__name__}"
+            )
+        if it is None:
+            it = self._iteration
+        ts = self._get_timestamp()
+        self._queue.put(("component", (component, tag, it, ts)))
+
+    def add_markdown(
+        self, tag: str, content: str, it: int | None = None
+    ) -> None:
+        from rinnsal.data.logger.components import Markdown
+
+        self.add(Markdown(content), tag=tag, it=it)
+
+    def add_plotly(
+        self, tag: str, fig: Any, it: int | None = None
+    ) -> None:
+        from rinnsal.data.logger.components import Plotly
+
+        self.add(Plotly(fig), tag=tag, it=it)
+
+    def add_table(
+        self,
+        tag: str,
+        data: Any,
+        headers: list[str] | None = None,
+        it: int | None = None,
+    ) -> None:
+        from rinnsal.data.logger.components import Table
+
+        self.add(Table(data, headers=headers), tag=tag, it=it)
+
+    def add_artifact(
+        self,
+        tag: str,
+        obj: Any,
+        description: str = "",
+        it: int | None = None,
+    ) -> None:
+        from rinnsal.data.logger.components import Artifact
+
+        self.add(Artifact(obj, description=description), tag=tag, it=it)
+
+    def add_code(
+        self,
+        tag: str,
+        source: str,
+        language: str = "python",
+        it: int | None = None,
+    ) -> None:
+        from rinnsal.data.logger.components import PythonCode
+
+        self.add(PythonCode(source, language=language), tag=tag, it=it)
+
+    def add_progress(
+        self,
+        tag: str,
+        value: float,
+        total: float = 1.0,
+        label: str = "",
+        it: int | None = None,
+    ) -> None:
+        from rinnsal.data.logger.components import ProgressBar
+
+        self.add(ProgressBar(value, total=total, label=label), tag=tag, it=it)
+
+    # --------------------------------------------------------------------- #
+    # Blob-store accessors (used by components)
+    # --------------------------------------------------------------------- #
+
+    def _put_blob(self, data: bytes) -> str:
+        if self._blob_store is None:
+            raise RuntimeError("Logger has no blob store configured")
+        return self._blob_store.put_blob(data)
+
+    def _write_component(
+        self, component: Any, tag: str, it: int, ts: float
+    ) -> None:
+        from rinnsal.data.logger.events_pb2 import Event
+
+        field, msg = component.to_payload(self)
+        # Populate the tag on the payload message.
+        if hasattr(msg, "tag"):
+            msg.tag = tag
+        event = Event()
+        event.timestamp = ts
+        event.iteration = it
+        getattr(event, field).CopyFrom(msg)
+        self._event_writer.write(event)
+
+    def _write_card_event(
+        self,
+        name: str,
+        task: str,
+        components: list,
+        it: int,
+        ts: float,
+    ) -> None:
+        from rinnsal.data.logger.card import build_card_event
+        from rinnsal.data.logger.events_pb2 import Event
+
+        card_event = build_card_event(name, task, components, logger=self)
+        event = Event()
+        event.timestamp = ts
+        event.iteration = it
+        event.card_event.CopyFrom(card_event)
+        self._event_writer.write(event)
+
+    def card(self, name: str, task: str | None = None) -> "Any":
+        """Return a ``Card`` builder bound to this Logger.
+
+        The card is keyed by ``(task, name)``. When *task* is None,
+        the current task name from :mod:`rinnsal.context` is captured
+        (empty string at top level).
+        """
+        from rinnsal.data.logger.card import Card
+
+        if task is None:
+            try:
+                from rinnsal.context import current
+
+                task = current.task_name or ""
+            except Exception:
+                task = ""
+        return Card(self, name, task=task)
+
+    def _enqueue_card(
+        self,
+        name: str,
+        task: str,
+        components: list,
+        it: int | None,
+    ) -> None:
+        if it is None:
+            it = self._iteration
+        ts = self._get_timestamp()
+        self._queue.put(("card_event", (name, task, components, it, ts)))
 
     def __enter__(self) -> Logger:
         return self

@@ -165,6 +165,13 @@ class LoggerProxy:
         it: int | None = None,
         interactive: bool = True,
     ) -> None:
+        # Plotly figures are routed through the component path (interactive
+        # JSON only on the remote; kaleido PNG happens orchestrator-side).
+        if type(figure).__module__.split(".")[0] == "plotly":
+            from rinnsal.data.logger.components import Plotly
+
+            return self.add(Plotly(figure), tag=tag, it=it)
+
         from rinnsal.data.logger.events_pb2 import Event, Figure
 
         import cloudpickle
@@ -199,26 +206,6 @@ class LoggerProxy:
                 tag=tag, data=png_data, width=width,
                 height=height, format="png",
             )
-        )
-        self._emit(event)
-
-    def add_card(
-        self,
-        task: str,
-        kind: str,
-        title: str = "",
-        content: str = "",
-        image: bytes = b"",
-        it: int | None = None,
-    ) -> None:
-        from rinnsal.data.logger.events_pb2 import Card, Event
-
-        event = Event()
-        event.timestamp = self._ts()
-        event.iteration = self._it(it)
-        event.card.CopyFrom(
-            Card(task=task, kind=kind, title=title,
-                 content=content, image=image)
         )
         self._emit(event)
 
@@ -273,6 +260,124 @@ class LoggerProxy:
         event.task_edge.CopyFrom(
             TaskEdge(from_task=from_task, to_task=to_task)
         )
+        self._emit(event)
+
+    # ------------------------------------------------------------------
+    # Unified component API (mirrors Logger)
+    # ------------------------------------------------------------------
+
+    # Proxies have no blob store; heavy components serialize inline and
+    # the orchestrator's replay_events() can offload bytes to the real
+    # Database after reception.
+    _blob_store = None
+
+    def add(self, component: Any, tag: str, it: int | None = None) -> None:
+        from rinnsal.data.logger.events_pb2 import Event
+        from rinnsal.data.logger.components import Component
+
+        if not isinstance(component, Component):
+            raise TypeError(
+                f"add() expects a Component instance, got {type(component).__name__}"
+            )
+        field, msg = component.to_payload(self)
+        if hasattr(msg, "tag"):
+            msg.tag = tag
+        event = Event()
+        event.timestamp = self._ts()
+        event.iteration = self._it(it)
+        getattr(event, field).CopyFrom(msg)
+        self._emit(event)
+
+    def add_markdown(
+        self, tag: str, content: str, it: int | None = None
+    ) -> None:
+        from rinnsal.data.logger.components import Markdown
+
+        self.add(Markdown(content), tag=tag, it=it)
+
+    def add_plotly(
+        self, tag: str, fig: Any, it: int | None = None
+    ) -> None:
+        from rinnsal.data.logger.components import Plotly
+
+        self.add(Plotly(fig), tag=tag, it=it)
+
+    def add_table(
+        self,
+        tag: str,
+        data: Any,
+        headers: list[str] | None = None,
+        it: int | None = None,
+    ) -> None:
+        from rinnsal.data.logger.components import Table
+
+        self.add(Table(data, headers=headers), tag=tag, it=it)
+
+    def add_artifact(
+        self,
+        tag: str,
+        obj: Any,
+        description: str = "",
+        it: int | None = None,
+    ) -> None:
+        from rinnsal.data.logger.components import Artifact
+
+        self.add(Artifact(obj, description=description), tag=tag, it=it)
+
+    def add_code(
+        self,
+        tag: str,
+        source: str,
+        language: str = "python",
+        it: int | None = None,
+    ) -> None:
+        from rinnsal.data.logger.components import PythonCode
+
+        self.add(PythonCode(source, language=language), tag=tag, it=it)
+
+    def add_progress(
+        self,
+        tag: str,
+        value: float,
+        total: float = 1.0,
+        label: str = "",
+        it: int | None = None,
+    ) -> None:
+        from rinnsal.data.logger.components import ProgressBar
+
+        self.add(ProgressBar(value, total=total, label=label), tag=tag, it=it)
+
+    # ------------------------------------------------------------------
+    # Card builder
+    # ------------------------------------------------------------------
+
+    def card(self, name: str, task: str | None = None) -> Any:
+        from rinnsal.data.logger.card import Card
+
+        if task is None:
+            try:
+                from rinnsal.context import current
+
+                task = current.task_name or ""
+            except Exception:
+                task = ""
+        return Card(self, name, task=task)
+
+    def _enqueue_card(
+        self,
+        name: str,
+        task: str,
+        components: list,
+        it: int | None,
+    ) -> None:
+        from rinnsal.data.logger.card import build_card_event
+        from rinnsal.data.logger.events_pb2 import Event
+
+        card_event = build_card_event(name, task, components, logger=self)
+        event = Event()
+        event.timestamp = self._ts()
+        event.iteration = self._it(it)
+        event.card_event.CopyFrom(card_event)
         self._emit(event)
 
     def flush(self) -> None:

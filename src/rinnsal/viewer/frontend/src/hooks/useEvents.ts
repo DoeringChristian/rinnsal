@@ -4,12 +4,12 @@ import {
   fetchText,
   fetchFiguresMeta,
   fetchImagesMeta,
-  fetchCards,
+  fetchCardsIndex,
   ScalarData,
   TextData,
   FigureMetaData,
   ImageMetaData,
-  CardData,
+  CardIndexEntry,
 } from "../lib/api";
 
 export type Tab = "scalars" | "text" | "figures" | "images" | "cards" | "compare" | "graph";
@@ -19,7 +19,7 @@ interface UseEventsResult {
   text: Map<string, TextData>;
   figures: Map<string, FigureMetaData>;
   images: Map<string, ImageMetaData>;
-  cards: Map<string, CardData>;
+  cards: Map<string, CardIndexEntry[]>;
   isLoading: boolean;
   error: string | null;
   refresh: () => void;
@@ -33,7 +33,7 @@ export function useEvents(
   const [text, setText] = useState<Map<string, TextData>>(new Map());
   const [figures, setFigures] = useState<Map<string, FigureMetaData>>(new Map());
   const [images, setImages] = useState<Map<string, ImageMetaData>>(new Map());
-  const [cards, setCards] = useState<Map<string, CardData>>(new Map());
+  const [cards, setCards] = useState<Map<string, CardIndexEntry[]>>(new Map());
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -78,7 +78,7 @@ export function useEvents(
               case "text": return [run, await fetchText(run)] as const;
               case "figures": return [run, await fetchFiguresMeta(run)] as const;
               case "images": return [run, await fetchImagesMeta(run)] as const;
-              case "cards": return [run, await fetchCards(run)] as const;
+              case "cards": return [run, await fetchCardsIndex(run)] as const;
             }
           })
         );

@@ -20,7 +20,6 @@ class ExecutionResult:
     stderr: str = ""
     success: bool = True
     error: Exception | None = None
-    card: list[dict] | None = None
     logger_events: bytes = b""
 
 

@@ -119,6 +119,7 @@ class SlurmExecutor(Executor):
             submission_pkl=str(submission_pkl),
             result_pkl=str(result_pkl),
             checkpoint_path=self._checkpoint_path,
+            task_name=expr.task_name or "",
         )
         worker_py = job_path / "worker.py"
         worker_py.write_text(worker_script)
@@ -192,6 +193,7 @@ def _make_worker_script(
     submission_pkl: str,
     result_pkl: str,
     checkpoint_path: str | None = None,
+    task_name: str = "",
 ) -> str:
     """Generate the Python script that runs inside the Slurm job."""
     checkpoint_block = ""
@@ -203,6 +205,16 @@ from rinnsal.context import Checkpoint, current
 current._set_checkpoint(Checkpoint(path=Path("{checkpoint_path}")))
 """
 
+    task_name_block = ""
+    if task_name:
+        # Propagate task identity so user code (e.g. Logger.card()) sees
+        # current.task_name inside the worker.
+        escaped = task_name.replace('"', '\\"')
+        task_name_block = (
+            f'from rinnsal.context import current as _ctx_for_task\n'
+            f'_ctx_for_task._set_task_name("{escaped}")\n'
+        )
+
     return f"""#!/usr/bin/env python3
 \"\"\"Auto-generated rinnsal Slurm worker script.\"\"\"
 import sys
@@ -210,13 +222,13 @@ import cloudpickle
 import traceback
 
 {checkpoint_block}
+{task_name_block}
 
 # Set up logger proxy for relaying events back to orchestrator
 from rinnsal.data.logger.proxy import LoggerProxy
-from rinnsal.context import Card, current
+from rinnsal.context import current
 _proxy = LoggerProxy()
 current._set_logger(_proxy)
-current._set_card(Card())
 
 # Load and execute
 with open("{submission_pkl}", "rb") as f:
@@ -224,19 +236,16 @@ with open("{submission_pkl}", "rb") as f:
 
 try:
     result = func(*args, **kwargs)
-    _card = current._reset()
     with open("{result_pkl}", "wb") as f:
-        cloudpickle.dump((
-            "success", result, None, _proxy.get_buffer(),
-            _card.serialize() if _card else None,
-        ), f)
+        cloudpickle.dump(
+            ("success", result, None, _proxy.get_buffer()), f
+        )
 except Exception as e:
-    current._reset()
     tb = traceback.format_exc()
     with open("{result_pkl}", "wb") as f:
-        cloudpickle.dump((
-            "error", e, tb, _proxy.get_buffer(), None,
-        ), f)
+        cloudpickle.dump(
+            ("error", e, tb, _proxy.get_buffer()), f
+        )
 finally:
     current._reset_logger()
 """
@@ -338,11 +347,9 @@ def _poll_slurm_job(
                 with open(result_pkl, "rb") as f:
                     outcome = cloudpickle.load(f)
 
-                # Unpack: (status, result|error, traceback|None,
-                #          logger_events, card)
-                # Legacy 3-tuples still work (no logger_events/card).
+                # Unpack: (status, result|error, traceback|None, logger_events)
+                # Legacy 3-tuples still work (no logger_events).
                 logger_events = outcome[3] if len(outcome) > 3 else b""
-                card = outcome[4] if len(outcome) > 4 else None
 
                 if outcome[0] == "success":
                     future.set_result(
@@ -352,7 +359,6 @@ def _poll_slurm_job(
                             stderr=stderr,
                             success=True,
                             logger_events=logger_events or b"",
-                            card=card,
                         )
                     )
                 else:
@@ -365,7 +371,6 @@ def _poll_slurm_job(
                             success=False,
                             error=outcome[1],
                             logger_events=logger_events or b"",
-                            card=card,
                         )
                     )
             except Exception as e:
