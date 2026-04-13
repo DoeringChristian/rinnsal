@@ -8,12 +8,12 @@ dependencies = ["cloudpickle>=3.0", "pyyaml>=6.0", "protobuf>=4.0"]
 
 [project.optional-dependencies]
 ssh = ["asyncssh>=2.14"]
-ray = ["ray>=2.9"]
+plotly = ["plotly>=5", "kaleido"]
 viewer = [
     "fastapi>=0.100",
     "uvicorn[standard]>=0.20",
 ]
-all = ["rinnsal[ssh,ray,viewer]"]
+all = ["rinnsal[ssh,plotly,viewer]"]
 
 [dependency-groups]
 dev = [
@@ -39,7 +39,6 @@ markers = [
     "integration: Integration tests (cross-component)",
     "slow: Performance tests",
     "ssh: Requires SSH setup",
-    "ray: Requires Ray cluster",
 ]
 
 [tool.mypy]
