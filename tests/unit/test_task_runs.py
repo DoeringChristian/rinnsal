@@ -50,7 +50,9 @@ class TestTaskRuns:
         assert [e.result for e in runs] == [0, 1, 2]
 
     def test_type_alias(self):
-        assert TaskRuns is Runs[Entry]
+        # Use == (structural identity) rather than `is` — Python's
+        # `_GenericAlias` caching is sensitive to import order.
+        assert TaskRuns == Runs[Entry]
 
 
 class TestTaskExpressionRuns:

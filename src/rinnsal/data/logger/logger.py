@@ -47,6 +47,7 @@ class Logger:
         self,
         log_dir: str | Path | None = None,
         database: Any = None,
+        metadata_store: Any = None,
     ):
         if log_dir is None:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -58,6 +59,14 @@ class Logger:
         # Heavy components (Plotly JSON, PNGs, pickled objects) offload
         # to this when available, keeping events.pb small.
         self._blob_store = database
+        # Optional metadata store (SqliteMetadataStore) — task_node /
+        # task_edge events are mirrored here for fast viewer lookup.
+        # events.pb is canonical; DB writes are best-effort.
+        self._metadata_store = metadata_store
+        # Run identity, set by set_run_metadata() before writes happen.
+        # When None, metadata writes are skipped (legacy callers).
+        self._run_id: str | None = None
+        self._flow_name: str | None = None
 
         # Create marker file to identify this as a rinnsal run directory
         marker_path = self._log_dir / MARKER_FILE
@@ -414,6 +423,34 @@ class Logger:
         )
         self._event_writer.write(event)
 
+        # Mirror to the metadata store when configured. events.pb stays
+        # canonical; DB writes are best-effort and never bubble up.
+        if self._metadata_store is not None and self._run_id is not None:
+            try:
+                from rinnsal.data.metadata import TaskNodeRow
+
+                self._metadata_store.upsert_task_node(
+                    TaskNodeRow(
+                        run_id=self._run_id,
+                        task_name=task_name,
+                        task_hash=task_hash,
+                        status=status,
+                        duration=duration,
+                        error=error,
+                        ts=ts,
+                        params_json=params,
+                    )
+                )
+            except Exception:
+                import traceback
+                import sys
+
+                sys.stderr.write(
+                    "rinnsal: metadata_store.upsert_task_node failed; "
+                    "events.pb remains canonical.\n"
+                )
+                traceback.print_exc(file=sys.stderr)
+
     def _write_task_edge(
         self, from_task: str, to_task: str, it: int, ts: float
     ) -> None:
@@ -426,6 +463,31 @@ class Logger:
             TaskEdge(from_task=from_task, to_task=to_task)
         )
         self._event_writer.write(event)
+
+        if self._metadata_store is not None and self._run_id is not None:
+            try:
+                self._metadata_store.upsert_task_edge(
+                    self._run_id, from_task, to_task
+                )
+            except Exception:
+                import traceback
+                import sys
+
+                sys.stderr.write(
+                    "rinnsal: metadata_store.upsert_task_edge failed; "
+                    "events.pb remains canonical.\n"
+                )
+                traceback.print_exc(file=sys.stderr)
+
+    def set_run_metadata(self, run_id: str, flow_name: str) -> None:
+        """Stamp this Logger with run identity for metadata-store writes.
+
+        Called by FlowResult.run after creating the Logger. Without
+        this, metadata writes are silently skipped (legacy callers
+        unaffected).
+        """
+        self._run_id = run_id
+        self._flow_name = flow_name
 
     def _convert_to_png(self, image: Any) -> tuple[bytes, int, int]:
         """Convert image data to PNG bytes. Returns (png_bytes, width, height)."""

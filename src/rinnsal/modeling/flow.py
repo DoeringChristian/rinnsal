@@ -172,6 +172,7 @@ class FlowResult:
         database = engine.database
 
         # Create logger for this flow run
+        import time as _time
         from pathlib import Path
         from rinnsal.context import current
         from rinnsal.data.logger import Logger
@@ -191,10 +192,54 @@ class FlowResult:
         if run_store is None:
             run_dir.mkdir(parents=True, exist_ok=True)
 
-        logger = Logger(run_dir)
+        # Acquire the metadata store via the database when possible.
+        # Heavy-path: events.pb stays canonical; the DB is a fast index.
+        metadata_store = None
+        if database is not None and hasattr(database, "metadata_store"):
+            try:
+                metadata_store = database.metadata_store()
+            except Exception:
+                import sys
+                import traceback
+
+                sys.stderr.write(
+                    "rinnsal: could not open metadata store; "
+                    "continuing without it.\n"
+                )
+                traceback.print_exc(file=sys.stderr)
+                metadata_store = None
+
+        logger = Logger(run_dir, database=database, metadata_store=metadata_store)
+        logger.set_run_metadata(run_id, self._flow_name)
         current._set_logger(logger)
         engine.executor.set_logger(logger)
         logger.add_text("flow/info", f"Flow: {self._flow_name}")
+
+        # Stamp the run row in the metadata store. Failures are non-fatal.
+        if metadata_store is not None:
+            try:
+                from rinnsal.data.metadata import RunUpsert
+
+                metadata_store.upsert_flow(self._flow_name)
+                metadata_store.upsert_run(
+                    RunUpsert(
+                        run_id=run_id,
+                        flow_name=self._flow_name,
+                        run_dir=str(run_dir),
+                        status="running",
+                        started_at=_time.time(),
+                        tags=list(self._builtin_flags.get("tags", [])),
+                    )
+                )
+            except Exception:
+                import sys
+                import traceback
+
+                sys.stderr.write(
+                    "rinnsal: metadata_store run upsert failed; "
+                    "events.pb remains canonical.\n"
+                )
+                traceback.print_exc(file=sys.stderr)
 
         # Log system information for this run
         import platform
@@ -421,6 +466,34 @@ class FlowResult:
                         [e.hash for e in ordered],
                         metadata=run_metadata,
                     )
+
+            # Mirror the run-completion to the metadata store, including
+            # any snapshot hash recorded during the run.
+            if metadata_store is not None:
+                try:
+                    final_status = (
+                        "interrupted" if interrupted
+                        else "failed" if errors
+                        else "success"
+                    )
+                    metadata_store.update_run_status(
+                        run_id,
+                        status=final_status,
+                        finished_at=_time.time(),
+                        failed_count=n_failed,
+                        snapshot_hash=run_metadata.get("snapshot")
+                        if database is not None
+                        else None,
+                        task_count=len(ordered),
+                    )
+                except Exception:
+                    import sys
+                    import traceback
+
+                    sys.stderr.write(
+                        "rinnsal: metadata_store.update_run_status failed.\n"
+                    )
+                    traceback.print_exc(file=sys.stderr)
 
             if interrupted:
                 raise KeyboardInterrupt

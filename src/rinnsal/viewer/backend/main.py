@@ -18,7 +18,6 @@ from rinnsal.viewer._data import (
     discover_flows,
     discover_runs,
     get_cache,
-    get_task_graph,
     is_run_directory,
 )
 
@@ -158,6 +157,30 @@ def get_config() -> dict:
     """Get initial configuration from environment."""
     log_dir = os.environ.get("RINNSAL_LOG_DIR", "")
     return {"logDir": log_dir}
+
+
+@app.get("/api/index/status")
+def index_status() -> dict:
+    """Backfill progress for the viewer's sidebar spinner.
+
+    Returns ``{indexing, done, total, current, started_at, finished_at,
+    errors}``. When no backfill is registered (e.g. tests, manual server),
+    returns an idle snapshot.
+    """
+    from rinnsal.data.metadata.backfill import get_global_backfiller
+
+    bf = get_global_backfiller()
+    if bf is None:
+        return {
+            "indexing": False,
+            "done": 0,
+            "total": 0,
+            "current": None,
+            "started_at": None,
+            "finished_at": None,
+            "errors": [],
+        }
+    return bf.progress.to_dict()
 
 
 @app.get("/api/runs")
@@ -480,31 +503,27 @@ def get_blob(
     return _blob_response(data, blob_hash, if_none_match)
 
 
+def _metadata_store_for(root_path: Path):
+    """Return a SqliteMetadataStore rooted at the given DB root.
+
+    Engines are process-cached by absolute path, so repeat callers
+    share connections.
+    """
+    from rinnsal.data.metadata import SqliteMetadataStore
+
+    return SqliteMetadataStore(root_path / "metadata.sqlite")
+
+
 def _flows_last_modified(root_path: Path) -> float | None:
-    """Max events.pb mtime across every run under the flows tree."""
-    t0 = time.perf_counter()
-    flows_map = discover_flows(root_path)
-    n_discover = (time.perf_counter() - t0) * 1000
-    latest: float | None = None
-    n_runs = 0
-    n_stats = 0
-    t_stat = 0.0
-    for runs in flows_map.values():
-        for run_dir in runs:
-            n_runs += 1
-            ts0 = time.perf_counter()
-            mt = _events_mtime(run_dir)
-            t_stat += time.perf_counter() - ts0
-            n_stats += 1
-            if mt is None:
-                continue
-            if latest is None or mt > latest:
-                latest = mt
-    log.debug(
-        "_flows_last_modified: discover=%.0fms, %d runs, %d stats=%.0fms",
-        n_discover, n_runs, n_stats, t_stat * 1000,
-    )
-    return latest
+    """Max(finished_at, started_at) across every run under the flow tree.
+
+    Backed by a single SQL query (no filesystem walk).
+    """
+    try:
+        store = _metadata_store_for(root_path)
+    except Exception:
+        return None
+    return store.latest_updated_at()
 
 
 def _flows_not_modified(
@@ -544,13 +563,12 @@ def list_flows(
     root: Annotated[str, Query(description="Root directory containing flows/")],
     if_modified_since: str | None = Header(default=None),
 ) -> Response:
-    """List all flows and their aggregated task DAGs.
+    """List flows + their latest-run task DAG.
 
-    Returns ``{flows: [{name, run_count, latest_run, nodes, edges}]}``.
-
-    For each flow, walks every run's events.pb and aggregates
-    TaskNode/TaskEdge events by task_name. Each node's info reflects
-    the most recent run; edges are a union across all runs.
+    Backed by the metadata DB (SqliteMetadataStore). Sub-millisecond
+    regardless of how many figures/cards each run contains. The DAG
+    aggregation walks only the LATEST run per flow (a SQL query) —
+    legacy pre-DB code aggregated across every run via events.pb scan.
     """
     root_path = Path(root).resolve()
     not_mod = _flows_not_modified(root_path, if_modified_since)
@@ -558,108 +576,45 @@ def list_flows(
         log.debug("list_flows %s: 304 Not Modified", root_path)
         return not_mod
 
-    t_discover0 = time.perf_counter()
-    flows_map = discover_flows(root_path)
-    t_discover = (time.perf_counter() - t_discover0) * 1000
-    total_runs = sum(len(rs) for rs in flows_map.values())
+    t0 = time.perf_counter()
+    store = _metadata_store_for(root_path)
+    flows = store.list_flows()
     log.debug(
-        "list_flows %s: discover_flows -> %d flows, %d runs in %.0fms",
-        root_path, len(flows_map), total_runs, t_discover,
+        "list_flows %s: %d flows from DB in %.0fms",
+        root_path, len(flows), (time.perf_counter() - t0) * 1000,
     )
-
-    t_graphs = 0.0
-    n_graph_loads = 0
-    slow_runs: list[tuple[str, float]] = []  # (run_dir, ms) for runs > 500ms
 
     result_flows: list[dict] = []
-    for flow_name, runs in flows_map.items():
-        # Aggregate across runs (oldest first so newer overwrites)
-        nodes: dict[str, dict] = {}
-        node_run_counts: dict[str, int] = {}
-        edges: set[tuple[str, str]] = set()
-        latest_ts_per_node: dict[str, float] = {}
-
-        for run_dir in reversed(runs):  # oldest first
-            tg0 = time.perf_counter()
-            cache = get_task_graph(run_dir)
-            tg_ms = (time.perf_counter() - tg0) * 1000
-            t_graphs += tg_ms
-            n_graph_loads += 1
-            if tg_ms > 500:
-                slow_runs.append((str(run_dir), tg_ms))
-            # Dedupe nodes within one run by task_name — prefer
-            # terminal states ("success"/"failed") over "cached", which
-            # only indicates the task was already computed earlier in
-            # the same run (engine.evaluate is called once per
-            # top-level task, so cached repeats are noise here).
-            priority = {"cached": 0, "running": 1, "success": 2, "failed": 2}
-            run_nodes: dict[str, tuple[str, str, float, str, float, str]] = {}
-            for (
-                task_name,
-                task_hash,
-                status,
-                duration,
-                error,
-                ts,
-                params,
-            ) in cache.task_nodes:
-                if not task_name:
-                    continue
-                existing = run_nodes.get(task_name)
-                if existing is not None:
-                    if priority.get(status, 0) < priority.get(existing[1], 0):
-                        continue
-                run_nodes[task_name] = (task_hash, status, duration, error, ts, params)
-
-            for task_name, data in run_nodes.items():
-                task_hash, status, duration, error, ts, params = data
-                node_run_counts[task_name] = (
-                    node_run_counts.get(task_name, 0) + 1
-                )
-                if (
-                    task_name not in latest_ts_per_node
-                    or ts >= latest_ts_per_node[task_name]
-                ):
-                    latest_ts_per_node[task_name] = ts
-                    nodes[task_name] = {
-                        "name": task_name,
-                        "task_hash": task_hash,
-                        "status": status,
-                        "duration": duration,
-                        "error": error,
-                        "timestamp": ts,
-                        "params": params,
+    for fs in flows:
+        nodes: list[dict] = []
+        edges: list[dict] = []
+        if fs.latest_run_id is not None:
+            for n in store.list_task_nodes(fs.latest_run_id):
+                nodes.append(
+                    {
+                        "name": n.task_name,
+                        "task_hash": n.task_hash,
+                        "status": n.status,
+                        "duration": n.duration,
+                        "error": n.error,
+                        "timestamp": n.ts,
+                        "params": n.params_json,
+                        "run_count": fs.run_count,
                     }
-
-            for from_t, to_t in cache.task_edges:
-                if from_t and to_t:
-                    edges.add((from_t, to_t))
-
-        for name, count in node_run_counts.items():
-            nodes[name]["run_count"] = count
-
+                )
+            edges = [
+                {"from": f, "to": t}
+                for f, t in store.list_task_edges(fs.latest_run_id)
+            ]
         result_flows.append(
             {
-                "name": flow_name,
-                "run_count": len(runs),
-                "latest_run": runs[0].name if runs else None,
-                "nodes": list(nodes.values()),
-                "edges": [
-                    {"from": f, "to": t} for f, t in sorted(edges)
-                ],
+                "name": fs.name,
+                "run_count": fs.run_count,
+                "latest_run": fs.latest_run_id,
+                "nodes": nodes,
+                "edges": edges,
             }
         )
-
-    result_flows.sort(key=lambda f: f["name"])
-    log.debug(
-        "list_flows %s: %d task-graph loads in %.0fms (avg %.0fms each)",
-        root_path,
-        n_graph_loads,
-        t_graphs,
-        t_graphs / n_graph_loads if n_graph_loads else 0,
-    )
-    for rd, ms in slow_runs:
-        log.debug("  slow task_graph load: %s (%.0fms)", rd, ms)
 
     from fastapi.responses import JSONResponse
     return JSONResponse(
@@ -675,62 +630,74 @@ def task_history(
     root: Annotated[str, Query(description="Root directory containing flows/")],
     if_modified_since: str | None = Header(default=None),
 ) -> Response:
-    """Return per-run history for one task within a flow.
+    """Per-run history for one task within a flow (newest-first).
 
-    Returns ``{history: [{run_id, status, duration, timestamp, error,
-    task_hash}]}`` sorted newest-first.
+    Backed by a single SQL JOIN on (runs, task_nodes).
     """
     root_path = Path(root).resolve()
     not_mod = _flows_not_modified(root_path, if_modified_since)
     if not_mod is not None:
         return not_mod
-    flows_map = discover_flows(root_path)
-    runs = flows_map.get(flow_name, [])
-
-    priority = {"cached": 0, "running": 1, "success": 2, "failed": 2}
-
-    history: list[dict] = []
-    for run_dir in runs:
-        cache = get_task_graph(run_dir)
-        # Find the "best" TaskNode matching task_name in this run —
-        # terminal states (success/failed) win over "cached", which only
-        # marks a repeated reference within the same run.
-        match: tuple[str, str, float, str, float, str] | None = None
-        for (
-            name,
-            task_hash,
-            status,
-            duration,
-            error,
-            ts,
-            params,
-        ) in cache.task_nodes:
-            if name != task_name:
-                continue
-            if (
-                match is None
-                or priority.get(status, 0) >= priority.get(match[1], 0)
-            ):
-                match = (task_hash, status, duration, error, ts, params)
-        if match is None:
-            continue
-        task_hash, status, duration, error, ts, params = match
-        history.append(
-            {
-                "run_id": run_dir.name,
-                "run_path": str(run_dir),
-                "status": status,
-                "duration": duration,
-                "timestamp": ts,
-                "error": error,
-                "task_hash": task_hash,
-                "params": params,
-            }
-        )
-
+    store = _metadata_store_for(root_path)
+    history = [
+        {
+            "run_id": h.run_id,
+            "run_path": h.run_dir,
+            "status": h.status,
+            "duration": h.duration,
+            "timestamp": h.ts,
+            "error": h.error,
+            "task_hash": h.task_hash,
+            "params": h.params_json,
+        }
+        for h in store.task_history(flow_name, task_name)
+    ]
     from fastapi.responses import JSONResponse
     return JSONResponse(
         content={"history": history},
+        headers=_flows_headers(root_path),
+    )
+
+
+@app.get("/api/flows/{flow_name}/dag")
+def flow_dag(
+    flow_name: str,
+    root: Annotated[str, Query(description="Root directory containing flows/")],
+    if_modified_since: str | None = Header(default=None),
+) -> Response:
+    """Task DAG (nodes + edges) for the latest run of a flow."""
+    root_path = Path(root).resolve()
+    not_mod = _flows_not_modified(root_path, if_modified_since)
+    if not_mod is not None:
+        return not_mod
+    store = _metadata_store_for(root_path)
+    runs = store.list_runs(flow_name=flow_name, limit=1)
+    if not runs:
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            content={"nodes": [], "edges": []},
+            headers=_flows_headers(root_path),
+        )
+    run = runs[0]
+    nodes = [
+        {
+            "name": n.task_name,
+            "task_hash": n.task_hash,
+            "status": n.status,
+            "duration": n.duration,
+            "error": n.error,
+            "timestamp": n.ts,
+            "params": n.params_json,
+        }
+        for n in store.list_task_nodes(run.run_id)
+    ]
+    edges = [
+        {"from": f, "to": t}
+        for f, t in store.list_task_edges(run.run_id)
+    ]
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        content={"run_id": run.run_id, "nodes": nodes, "edges": edges},
         headers=_flows_headers(root_path),
     )
 

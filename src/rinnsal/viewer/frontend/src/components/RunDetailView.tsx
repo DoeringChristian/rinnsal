@@ -197,14 +197,22 @@ export default function RunDetailView({
 
   // Reset loaded cache when run changes. Bump the generation counter
   // so any in-flight fetch from the previous run discards its response.
+  // Only bumps on actual changes — on first mount, the load effect that
+  // ran *before* this one captured generation 0, and we'd otherwise
+  // invalidate it and discard its response, leaving the run blank.
+  const prevRunPathRef = useRef<string | null>(null);
   useEffect(() => {
-    runGenRef.current += 1;
-    loadedRef.current.clear();
-    setScalars(new Map());
-    setText(new Map());
-    setFigures(new Map());
-    setImages(new Map());
-    setCards(new Map());
+    if (prevRunPathRef.current === runPath) return;
+    if (prevRunPathRef.current !== null) {
+      runGenRef.current += 1;
+      setScalars(new Map());
+      setText(new Map());
+      setFigures(new Map());
+      setImages(new Map());
+      setCards(new Map());
+      loadedRef.current.clear();
+    }
+    prevRunPathRef.current = runPath;
   }, [runPath]);
 
   // Split text data into user text, console output, and system info

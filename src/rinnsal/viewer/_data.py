@@ -12,6 +12,28 @@ from rinnsal.data.logger.logger import EVENTS_FILE, MARKER_FILE
 DEFAULT_MAX_POINTS = 1000
 
 
+def _read_varint(buf: bytes, idx: int) -> tuple[int | None, int]:
+    """Decode one protobuf varint from ``buf`` starting at ``idx``.
+
+    Returns ``(value, new_idx)`` or ``(None, idx)`` if the buffer ends
+    mid-varint.
+    """
+    result = 0
+    shift = 0
+    start = idx
+    n = len(buf)
+    while idx < n:
+        b = buf[idx]
+        idx += 1
+        result |= (b & 0x7F) << shift
+        if not (b & 0x80):
+            return result, idx
+        shift += 7
+        if shift >= 64:  # malformed
+            return None, start
+    return None, start
+
+
 def _resolve_blob_root(log_path: Path) -> Path | None:
     """Walk up from a run dir to find the FileDatabase root.
 
@@ -404,9 +426,26 @@ class RunCache:
             return True
 
 
+import threading
+
 # Module-level cache stores
 _run_caches: dict[Path, RunCache] = {}
 _task_graph_caches: dict[Path, "TaskGraphCache"] = {}
+
+# Per-path locks: prevents N concurrent /api/flows requests from each
+# loading the same multi-GB events.pb in parallel. The first request
+# loads, the others wait and reuse the populated cache.
+_task_graph_locks_lock = threading.Lock()
+_task_graph_locks: dict[Path, threading.Lock] = {}
+
+
+def _task_graph_lock(path: Path) -> threading.Lock:
+    with _task_graph_locks_lock:
+        lock = _task_graph_locks.get(path)
+        if lock is None:
+            lock = threading.Lock()
+            _task_graph_locks[path] = lock
+        return lock
 
 
 def get_cache(log_path: Path) -> RunCache:
@@ -446,13 +485,18 @@ class TaskGraphCache:
         self.file_size: int = 0
 
     def load(self, events_path: Path) -> None:
-        """Scan events.pb skipping any record that can't contain a
-        task_node/task_edge payload. Critical for runs with hundreds of
-        MB of figures: we seek past them instead of parsing.
+        """Scan events.pb reading only header bytes per record.
 
-        Wire-format peek: task_node = field 9 (tag byte 0x4A, length-
-        delimited), task_edge = field 10 (tag byte 0x52). If neither
-        byte appears in the first ~32 bytes of a record we skip.
+        Each rinnsal Event has fixed leading fields ``timestamp``
+        (field 1, fixed64) and ``iteration`` (field 2, varint). The
+        payload arrives as a single ``oneof data`` field — `task_node`
+        is field 9, `task_edge` is field 10, every other event type is
+        a heavy payload (Figure, Image, Plotly, CardEvent, …).
+
+        We parse the wire-format header for each record up to the
+        oneof field tag; if it's not 9 or 10 we ``f.seek`` past the
+        record without reading its body. Result: a multi-GB file with
+        hundreds of figures touches only a few KB of disk.
         """
         import logging
         import struct
@@ -469,71 +513,108 @@ class TaskGraphCache:
         self.task_nodes.clear()
         self.task_edges.clear()
 
-        TASK_NODE_TAG = 0x4A  # (field_number=9 << 3) | wire_type=2
-        TASK_EDGE_TAG = 0x52  # (field_number=10 << 3) | wire_type=2
-        PEEK_WINDOW = 64      # bytes at the start of each record to inspect
-
         n_records = 0
-        n_skipped = 0
+        n_header_only = 0   # records skipped after a header-only peek
         bytes_read = 0
+
+        # The header bytes we always care about:
+        #   tag(1)=fixed64 (0x09) + 8 bytes timestamp = 9
+        #   tag(2)=varint  (0x10) + 1..10 bytes iteration
+        # The oneof data tag immediately follows. Read 32 bytes — that
+        # comfortably covers the longest plausible varint iteration.
+        HEADER_PROBE = 32
 
         with open(events_path, "rb") as f:
             while True:
                 length_bytes = f.read(4)
                 if len(length_bytes) < 4:
                     break
-                length = struct.unpack("<I", length_bytes)[0]
+                record_len = struct.unpack("<I", length_bytes)[0]
                 n_records += 1
                 bytes_read += 4
 
-                peek = f.read(min(PEEK_WINDOW, length))
-                bytes_read += len(peek)
-                if TASK_NODE_TAG not in peek and TASK_EDGE_TAG not in peek:
-                    # No chance this record is a task_node/task_edge;
-                    # skip the remaining bytes without parsing.
-                    remaining = length - len(peek)
-                    if remaining > 0:
-                        f.seek(remaining, 1)
-                    n_skipped += 1
-                    continue
-
-                # Candidate — read the rest and parse.
-                if len(peek) < length:
-                    extra = f.read(length - len(peek))
-                    bytes_read += len(extra)
-                    peek += extra
-                if len(peek) < length:
+                probe_size = min(HEADER_PROBE, record_len)
+                head = f.read(probe_size)
+                bytes_read += len(head)
+                if len(head) < probe_size:
                     break
 
-                event = Event()
-                event.ParseFromString(peek)
-                dt = event.WhichOneof("data")
-                if dt == "task_node":
-                    tn = event.task_node
-                    self.task_nodes.append(
-                        (
-                            tn.task_name,
-                            tn.task_hash,
-                            tn.status,
-                            tn.duration,
-                            tn.error,
-                            event.timestamp,
-                            getattr(tn, "params", ""),
+                # Walk the header to locate the data-oneof field tag.
+                idx = 0
+                data_tag: int | None = None
+                while idx < len(head):
+                    # Each field starts with a varint "tag" combining
+                    # field number (>> 3) and wire type (& 7).
+                    tag, idx = _read_varint(head, idx)
+                    if tag is None:
+                        break
+                    field_no = tag >> 3
+                    wire = tag & 7
+
+                    if field_no in (1, 2):  # timestamp / iteration
+                        if wire == 0:                       # varint
+                            _, idx = _read_varint(head, idx)
+                        elif wire == 1:                     # fixed64
+                            idx += 8
+                        elif wire == 5:                     # fixed32
+                            idx += 4
+                        else:
+                            # Unexpected wire type for a known field;
+                            # bail out and full-parse to be safe.
+                            data_tag = -1
+                            break
+                        continue
+
+                    # Anything else is the data oneof payload.
+                    data_tag = field_no
+                    break
+
+                # Decide: skip, or read+parse.
+                if data_tag in (None, 9, 10):
+                    # 9 = task_node, 10 = task_edge — read the rest.
+                    if record_len > probe_size:
+                        extra = f.read(record_len - probe_size)
+                        bytes_read += len(extra)
+                        head += extra
+                    if len(head) < record_len:
+                        break
+
+                    event = Event()
+                    event.ParseFromString(head)
+                    dt = event.WhichOneof("data")
+                    if dt == "task_node":
+                        tn = event.task_node
+                        self.task_nodes.append(
+                            (
+                                tn.task_name,
+                                tn.task_hash,
+                                tn.status,
+                                tn.duration,
+                                tn.error,
+                                event.timestamp,
+                                getattr(tn, "params", ""),
+                            )
                         )
-                    )
-                elif dt == "task_edge":
-                    te = event.task_edge
-                    self.task_edges.append((te.from_task, te.to_task))
+                    elif dt == "task_edge":
+                        te = event.task_edge
+                        self.task_edges.append((te.from_task, te.to_task))
+                else:
+                    # Heavy event (Figure, Image, Plotly, CardEvent…).
+                    # Skip its body without reading it.
+                    remaining = record_len - probe_size
+                    if remaining > 0:
+                        f.seek(remaining, 1)
+                    n_header_only += 1
 
         elapsed = (time.perf_counter() - t0) * 1000
         if log.isEnabledFor(logging.DEBUG):
             log.debug(
-                "task_graph %s: %.1fMB file, %d records (%d skipped), "
-                "%d nodes, %d edges, %.1fMB read in %.0fms",
+                "task_graph %s: %.1fMB file, %d records (%d header-only), "
+                "%d nodes, %d edges, %.2fMB read in %.0fms",
                 events_path,
                 stat.st_size / 1e6,
                 n_records,
-                n_skipped,
+                n_header_only,
                 len(self.task_nodes),
                 len(self.task_edges),
                 bytes_read / 1e6,
@@ -554,24 +635,39 @@ class TaskGraphCache:
 def get_task_graph(log_path: Path) -> TaskGraphCache:
     """Return a task-graph-only cache; orders of magnitude cheaper than
     ``get_cache`` when the caller only needs ``task_nodes``/``task_edges``.
+
+    Concurrent callers for the same path are serialized via a per-path
+    lock so we don't load the same multi-GB events.pb N times in
+    parallel.
     """
     import logging
     log = logging.getLogger("rinnsal.viewer")
     events_path = log_path / EVENTS_FILE
+
     cache = _task_graph_caches.get(log_path)
     if cache is not None and not cache.is_stale(events_path):
         log.debug("task_graph CACHE HIT %s", events_path)
         return cache
-    cache = TaskGraphCache()
-    if events_path.exists():
-        try:
-            cache.load(events_path)
-        except (IOError, OSError) as e:
-            log.debug("task_graph load error %s: %s", events_path, e)
-    else:
-        log.debug("task_graph no events.pb at %s", events_path)
-    _task_graph_caches[log_path] = cache
-    return cache
+
+    lock = _task_graph_lock(log_path)
+    with lock:
+        # Re-check under the lock: a concurrent caller may have loaded
+        # this same path while we were waiting.
+        cache = _task_graph_caches.get(log_path)
+        if cache is not None and not cache.is_stale(events_path):
+            log.debug("task_graph CACHE HIT (post-lock) %s", events_path)
+            return cache
+
+        cache = TaskGraphCache()
+        if events_path.exists():
+            try:
+                cache.load(events_path)
+            except (IOError, OSError) as e:
+                log.debug("task_graph load error %s: %s", events_path, e)
+        else:
+            log.debug("task_graph no events.pb at %s", events_path)
+        _task_graph_caches[log_path] = cache
+        return cache
 
 
 def invalidate_caches() -> None:

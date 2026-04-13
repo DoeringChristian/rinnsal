@@ -64,6 +64,16 @@ class FileDatabase(BaseDatabase):
     def root(self) -> Path:
         return self._root
 
+    def metadata_store(self):
+        """Return the canonical SqliteMetadataStore for this DB root.
+
+        Stored at ``<root>/metadata.sqlite``; engines are process-cached
+        so repeated calls return the same instance.
+        """
+        from rinnsal.data.metadata import default_store_for
+
+        return default_store_for(self)
+
     def _task_dir(self, task_hash: str, task_name: str | None = None) -> Path:
         """Resolve the on-disk directory for a task.
 
