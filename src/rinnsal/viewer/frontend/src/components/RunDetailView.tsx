@@ -85,45 +85,66 @@ export default function RunDetailView({
   // The text tab needs to be loaded for console/system too
   const textNeededTabs: DetailTab[] = ["text", "console", "system"];
 
+  // Generation counter: bumped whenever runPath changes so a late-
+  // arriving fetch from a prior run can be identified and discarded.
+  // Without this, rapid-switching between runs pollutes the per-run
+  // Maps with stale data (e.g. ScalarChart overlaying the old run's
+  // curves on top of the new run).
+  const runGenRef = useRef(0);
+
   const loadTab = useCallback(
     async (tab: DetailTab, force = false) => {
       const loadKey = textNeededTabs.includes(tab) ? "text" : tab;
       const key = `${runPath}:${loadKey}`;
       if (!force && loadedRef.current.has(key)) return;
       loadedRef.current.add(key);
+      const startedPath = runPath;
+      const startedGen = runGenRef.current;
+      const alive = () =>
+        startedGen === runGenRef.current && startedPath === runPath;
       setIsLoading(true);
       try {
         switch (loadKey) {
           case "scalars": {
             const d = await fetchScalars(runPath);
-            setScalars((prev) => new Map(prev).set(runPath, d));
+            if (alive()) {
+              setScalars((prev) => new Map(prev).set(runPath, d));
+            }
             break;
           }
           case "text": {
             const d = await fetchText(runPath);
-            setText((prev) => new Map(prev).set(runPath, d));
+            if (alive()) {
+              setText((prev) => new Map(prev).set(runPath, d));
+            }
             break;
           }
           case "figures": {
             const d = await fetchFiguresMeta(runPath);
-            setFigures((prev) => new Map(prev).set(runPath, d));
+            if (alive()) {
+              setFigures((prev) => new Map(prev).set(runPath, d));
+            }
             break;
           }
           case "images": {
             const d = await fetchImagesMeta(runPath);
-            setImages((prev) => new Map(prev).set(runPath, d));
+            if (alive()) {
+              setImages((prev) => new Map(prev).set(runPath, d));
+            }
             break;
           }
           case "cards": {
             const d = await fetchCardsIndex(runPath);
-            setCards((prev) => new Map(prev).set(runPath, d));
+            if (alive()) {
+              setCards((prev) => new Map(prev).set(runPath, d));
+            }
             break;
           }
         }
       } catch (e) {
         console.error(`Failed to load ${tab}:`, e);
       } finally {
-        setIsLoading(false);
+        if (alive()) setIsLoading(false);
       }
     },
     [runPath]
@@ -174,8 +195,10 @@ export default function RunDetailView({
     loadTab(activeTab, true);
   }, [refreshKey, activeTab, loadTab]);
 
-  // Reset loaded cache when run changes
+  // Reset loaded cache when run changes. Bump the generation counter
+  // so any in-flight fetch from the previous run discards its response.
   useEffect(() => {
+    runGenRef.current += 1;
     loadedRef.current.clear();
     setScalars(new Map());
     setText(new Map());

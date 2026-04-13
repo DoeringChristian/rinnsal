@@ -85,7 +85,9 @@ function ImageRunCard({ run, runPath, tag, images, color, compareGroups, onAddTo
   }
 
   const currentImg = images[idx];
-  const imgSrc = imageUrl(runPath, tag, currentImg.it) + `&_v=${images.length}`;
+  // No cache-buster: with Cache-Control: immutable + ETag, the browser
+  // serves the same URL from cache on subsequent views.
+  const imgSrc = imageUrl(runPath, tag, currentImg.it);
 
   const handleSliderChange = (newIdx: number) => {
     const it = images[newIdx]?.it;
@@ -124,7 +126,7 @@ function ImageRunCard({ run, runPath, tag, images, color, compareGroups, onAddTo
           <input type="range" min={0} max={images.length - 1} value={idx} onChange={(e) => handleSliderChange(parseInt(e.target.value))} className="w-full" draggable={false} />
         </div>
       )}
-      <img src={imgSrc} alt={`${runName} - ${tag} @ ${currentImg.it}`} className="max-w-full rounded" loading="lazy" />
+      <LazyImage src={imgSrc} alt={`${runName} - ${tag} @ ${currentImg.it}`} className="max-w-full rounded" />
     </div>
   );
 }
