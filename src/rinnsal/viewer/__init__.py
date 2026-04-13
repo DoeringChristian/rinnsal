@@ -69,12 +69,19 @@ def _build_frontend_if_needed() -> bool:
         return False
 
 
-def run(log_path: str | Path | None = None, port: int = 8765) -> None:
+def run(
+    log_path: str | Path | None = None,
+    port: int = 8765,
+    host: str = "127.0.0.1",
+) -> None:
     """Run the viewer server.
 
     Args:
         log_path: Optional log directory to open on start.
         port: Port to run the server on. If busy, the next free port is used.
+        host: Interface to bind to. Defaults to ``127.0.0.1`` (loopback only).
+            Use ``0.0.0.0`` to accept connections from other machines on the
+            network (e.g. over Tailscale or LAN).
     """
     try:
         import uvicorn
@@ -96,7 +103,13 @@ def run(log_path: str | Path | None = None, port: int = 8765) -> None:
         os.environ["RINNSAL_LOG_DIR"] = str(Path(log_path).resolve())
 
     port = _find_free_port(port)
-    print(f"Starting rinnsal viewer on http://localhost:{port}")
+    display_host = "localhost" if host in ("127.0.0.1", "localhost") else host
+    print(f"Starting rinnsal viewer on http://{display_host}:{port}")
+    if host == "0.0.0.0":
+        print(
+            "  (accepting connections from all network interfaces — "
+            "anyone on this network can reach the viewer)"
+        )
 
     # Import and configure the app
     from rinnsal.viewer.backend.main import create_app_with_static
@@ -105,7 +118,7 @@ def run(log_path: str | Path | None = None, port: int = 8765) -> None:
 
     uvicorn.run(
         app,
-        host="127.0.0.1",
+        host=host,
         port=port,
         log_level="warning",
     )
@@ -126,6 +139,16 @@ def main() -> None:
         default=8765,
         help="Port to run the server on (default: 8765)",
     )
+    parser.add_argument(
+        "--host",
+        type=str,
+        default="127.0.0.1",
+        help=(
+            "Interface to bind to. Default 127.0.0.1 (loopback only). "
+            "Pass 0.0.0.0 to accept connections from other machines "
+            "(e.g. over Tailscale or LAN)."
+        ),
+    )
     args = parser.parse_args()
 
-    run(args.log_dir, args.port)
+    run(args.log_dir, args.port, host=args.host)
