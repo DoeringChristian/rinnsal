@@ -454,9 +454,14 @@ class TaskGraphCache:
         delimited), task_edge = field 10 (tag byte 0x52). If neither
         byte appears in the first ~32 bytes of a record we skip.
         """
+        import logging
         import struct
+        import time
 
         from rinnsal.data.logger.events_pb2 import Event
+
+        log = logging.getLogger("rinnsal.viewer")
+        t0 = time.perf_counter()
 
         stat = events_path.stat()
         self.file_mtime = stat.st_mtime
@@ -468,25 +473,35 @@ class TaskGraphCache:
         TASK_EDGE_TAG = 0x52  # (field_number=10 << 3) | wire_type=2
         PEEK_WINDOW = 64      # bytes at the start of each record to inspect
 
+        n_records = 0
+        n_skipped = 0
+        bytes_read = 0
+
         with open(events_path, "rb") as f:
             while True:
                 length_bytes = f.read(4)
                 if len(length_bytes) < 4:
                     break
                 length = struct.unpack("<I", length_bytes)[0]
+                n_records += 1
+                bytes_read += 4
 
                 peek = f.read(min(PEEK_WINDOW, length))
+                bytes_read += len(peek)
                 if TASK_NODE_TAG not in peek and TASK_EDGE_TAG not in peek:
                     # No chance this record is a task_node/task_edge;
                     # skip the remaining bytes without parsing.
                     remaining = length - len(peek)
                     if remaining > 0:
                         f.seek(remaining, 1)
+                    n_skipped += 1
                     continue
 
                 # Candidate — read the rest and parse.
                 if len(peek) < length:
-                    peek += f.read(length - len(peek))
+                    extra = f.read(length - len(peek))
+                    bytes_read += len(extra)
+                    peek += extra
                 if len(peek) < length:
                     break
 
@@ -510,6 +525,21 @@ class TaskGraphCache:
                     te = event.task_edge
                     self.task_edges.append((te.from_task, te.to_task))
 
+        elapsed = (time.perf_counter() - t0) * 1000
+        if log.isEnabledFor(logging.DEBUG):
+            log.debug(
+                "task_graph %s: %.1fMB file, %d records (%d skipped), "
+                "%d nodes, %d edges, %.1fMB read in %.0fms",
+                events_path,
+                stat.st_size / 1e6,
+                n_records,
+                n_skipped,
+                len(self.task_nodes),
+                len(self.task_edges),
+                bytes_read / 1e6,
+                elapsed,
+            )
+
     def is_stale(self, events_path: Path) -> bool:
         try:
             stat = events_path.stat()
@@ -525,16 +555,21 @@ def get_task_graph(log_path: Path) -> TaskGraphCache:
     """Return a task-graph-only cache; orders of magnitude cheaper than
     ``get_cache`` when the caller only needs ``task_nodes``/``task_edges``.
     """
+    import logging
+    log = logging.getLogger("rinnsal.viewer")
     events_path = log_path / EVENTS_FILE
     cache = _task_graph_caches.get(log_path)
     if cache is not None and not cache.is_stale(events_path):
+        log.debug("task_graph CACHE HIT %s", events_path)
         return cache
     cache = TaskGraphCache()
     if events_path.exists():
         try:
             cache.load(events_path)
-        except (IOError, OSError):
-            pass
+        except (IOError, OSError) as e:
+            log.debug("task_graph load error %s: %s", events_path, e)
+    else:
+        log.debug("task_graph no events.pb at %s", events_path)
     _task_graph_caches[log_path] = cache
     return cache
 

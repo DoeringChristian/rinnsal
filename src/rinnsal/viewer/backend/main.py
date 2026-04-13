@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import base64
+import logging
 import os
+import time
 from email.utils import formatdate, parsedate_to_datetime
 from pathlib import Path
 from typing import Annotated
@@ -20,7 +22,55 @@ from rinnsal.viewer._data import (
     is_run_directory,
 )
 
+# Dedicated logger so --debug on the viewer CLI controls viewer output
+# without changing application-wide logging behavior.
+log = logging.getLogger("rinnsal.viewer")
+
+
+def enable_debug_logging(level: int = logging.DEBUG) -> None:
+    """Turn on verbose per-request timing + I/O tracing.
+
+    Called from ``rinnsal-viewer --debug``. Formats each log line so
+    timings are easy to scan over a slow link:
+
+        [viewer] GET /api/flows?root=... -> 200 in 142ms
+        [viewer]   discover_flows(/..): 8 flows, 42 runs in 12ms
+        [viewer]   get_task_graph(.../runs/r7): events.pb 120MB scan 9.4s
+    """
+    log.setLevel(level)
+    if not log.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("[viewer] %(message)s"))
+        log.addHandler(handler)
+    log.propagate = False
+
+
 app = FastAPI(title="Rinnsal Viewer")
+
+
+@app.middleware("http")
+async def _time_requests(request: Request, call_next):
+    """Log every request's path + status + duration when debug is on."""
+    if not log.isEnabledFor(logging.INFO):
+        return await call_next(request)
+
+    t0 = time.perf_counter()
+    response = await call_next(request)
+    elapsed = (time.perf_counter() - t0) * 1000
+
+    # Truncate the query string at a sensible length so log lines stay readable.
+    qs = request.url.query
+    if len(qs) > 120:
+        qs = qs[:120] + "…"
+    path = f"{request.url.path}?{qs}" if qs else request.url.path
+    log.info(
+        "%s %s -> %d in %.0fms",
+        request.method,
+        path,
+        response.status_code,
+        elapsed,
+    )
+    return response
 
 
 def _resolve_run_path(run_path: str) -> Path:
@@ -432,15 +482,28 @@ def get_blob(
 
 def _flows_last_modified(root_path: Path) -> float | None:
     """Max events.pb mtime across every run under the flows tree."""
+    t0 = time.perf_counter()
     flows_map = discover_flows(root_path)
+    n_discover = (time.perf_counter() - t0) * 1000
     latest: float | None = None
+    n_runs = 0
+    n_stats = 0
+    t_stat = 0.0
     for runs in flows_map.values():
         for run_dir in runs:
+            n_runs += 1
+            ts0 = time.perf_counter()
             mt = _events_mtime(run_dir)
+            t_stat += time.perf_counter() - ts0
+            n_stats += 1
             if mt is None:
                 continue
             if latest is None or mt > latest:
                 latest = mt
+    log.debug(
+        "_flows_last_modified: discover=%.0fms, %d runs, %d stats=%.0fms",
+        n_discover, n_runs, n_stats, t_stat * 1000,
+    )
     return latest
 
 
@@ -492,8 +555,21 @@ def list_flows(
     root_path = Path(root).resolve()
     not_mod = _flows_not_modified(root_path, if_modified_since)
     if not_mod is not None:
+        log.debug("list_flows %s: 304 Not Modified", root_path)
         return not_mod
+
+    t_discover0 = time.perf_counter()
     flows_map = discover_flows(root_path)
+    t_discover = (time.perf_counter() - t_discover0) * 1000
+    total_runs = sum(len(rs) for rs in flows_map.values())
+    log.debug(
+        "list_flows %s: discover_flows -> %d flows, %d runs in %.0fms",
+        root_path, len(flows_map), total_runs, t_discover,
+    )
+
+    t_graphs = 0.0
+    n_graph_loads = 0
+    slow_runs: list[tuple[str, float]] = []  # (run_dir, ms) for runs > 500ms
 
     result_flows: list[dict] = []
     for flow_name, runs in flows_map.items():
@@ -504,7 +580,13 @@ def list_flows(
         latest_ts_per_node: dict[str, float] = {}
 
         for run_dir in reversed(runs):  # oldest first
+            tg0 = time.perf_counter()
             cache = get_task_graph(run_dir)
+            tg_ms = (time.perf_counter() - tg0) * 1000
+            t_graphs += tg_ms
+            n_graph_loads += 1
+            if tg_ms > 500:
+                slow_runs.append((str(run_dir), tg_ms))
             # Dedupe nodes within one run by task_name — prefer
             # terminal states ("success"/"failed") over "cached", which
             # only indicates the task was already computed earlier in
@@ -569,6 +651,16 @@ def list_flows(
         )
 
     result_flows.sort(key=lambda f: f["name"])
+    log.debug(
+        "list_flows %s: %d task-graph loads in %.0fms (avg %.0fms each)",
+        root_path,
+        n_graph_loads,
+        t_graphs,
+        t_graphs / n_graph_loads if n_graph_loads else 0,
+    )
+    for rd, ms in slow_runs:
+        log.debug("  slow task_graph load: %s (%.0fms)", rd, ms)
+
     from fastapi.responses import JSONResponse
     return JSONResponse(
         content={"flows": result_flows},

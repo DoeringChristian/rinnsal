@@ -14,6 +14,7 @@ import cloudpickle
 # File names for storage
 MARKER_FILE = ".rinnsal"  # Marker file identifying a rinnsal run directory
 EVENTS_FILE = "events.pb"  # Protobuf event file
+TASK_GRAPH_FILE = "task_graph.jsonl"  # Sidecar: one JSON obj per task_node/edge event
 
 
 class Logger:

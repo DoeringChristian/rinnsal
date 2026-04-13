@@ -73,6 +73,7 @@ def run(
     log_path: str | Path | None = None,
     port: int = 8765,
     host: str = "127.0.0.1",
+    debug: bool = False,
 ) -> None:
     """Run the viewer server.
 
@@ -82,6 +83,9 @@ def run(
         host: Interface to bind to. Defaults to ``127.0.0.1`` (loopback only).
             Use ``0.0.0.0`` to accept connections from other machines on the
             network (e.g. over Tailscale or LAN).
+        debug: When True, print every HTTP request with its duration plus
+            I/O breakdown for slow endpoints (per-run task-graph load
+            times, file sizes, record counts).
     """
     try:
         import uvicorn
@@ -112,7 +116,14 @@ def run(
         )
 
     # Import and configure the app
-    from rinnsal.viewer.backend.main import create_app_with_static
+    from rinnsal.viewer.backend.main import (
+        create_app_with_static,
+        enable_debug_logging,
+    )
+
+    if debug:
+        enable_debug_logging()
+        print("  (debug logging enabled — will print every request + I/O timings)")
 
     app = create_app_with_static()
 
@@ -120,7 +131,7 @@ def run(
         app,
         host=host,
         port=port,
-        log_level="warning",
+        log_level="info" if debug else "warning",
     )
 
 
@@ -149,6 +160,15 @@ def main() -> None:
             "(e.g. over Tailscale or LAN)."
         ),
     )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help=(
+            "Print every HTTP request with its duration, plus I/O "
+            "breakdowns for slow endpoints. Useful for diagnosing "
+            "'why is the viewer hanging' over a slow connection."
+        ),
+    )
     args = parser.parse_args()
 
-    run(args.log_dir, args.port, host=args.host)
+    run(args.log_dir, args.port, host=args.host, debug=args.debug)
