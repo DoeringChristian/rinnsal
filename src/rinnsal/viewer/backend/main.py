@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import base64
 import os
+from email.utils import formatdate, parsedate_to_datetime
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import FastAPI, Query, Response
+from fastapi import FastAPI, Header, Query, Request, Response
 from fastapi.staticfiles import StaticFiles
 
+from rinnsal.data.logger.logger import EVENTS_FILE
 from rinnsal.viewer._data import (
     discover_flows,
     discover_runs,
@@ -26,6 +28,78 @@ def _resolve_run_path(run_path: str) -> Path:
     if not path.is_absolute():
         path = Path("/") / run_path
     return path
+
+
+def _events_mtime(run_path: Path) -> float | None:
+    """Return events.pb mtime for a run, or None if missing."""
+    try:
+        return (run_path / EVENTS_FILE).stat().st_mtime
+    except OSError:
+        return None
+
+
+def _http_date(ts: float) -> str:
+    return formatdate(ts, usegmt=True)
+
+
+def _parse_http_date(value: str) -> float | None:
+    try:
+        return parsedate_to_datetime(value).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
+def _listing_headers(run_path: Path) -> dict[str, str]:
+    """Cache headers for per-run JSON listings.
+
+    The events.pb mtime is the single source of freshness — if the file
+    hasn't changed, listings are guaranteed unchanged (RunCache.is_stale
+    uses the same predicate). Browser revalidates with
+    If-Modified-Since; we return 304 when the timestamps match.
+    """
+    mtime = _events_mtime(run_path)
+    if mtime is None:
+        return {"Cache-Control": "no-cache"}
+    return {
+        "Cache-Control": "public, max-age=0, must-revalidate",
+        "Last-Modified": _http_date(mtime),
+    }
+
+
+def _not_modified(
+    run_path: Path, if_modified_since: str | None
+) -> Response | None:
+    """Return a 304 response if the client's cached copy is still fresh."""
+    if not if_modified_since:
+        return None
+    mtime = _events_mtime(run_path)
+    if mtime is None:
+        return None
+    client_ts = _parse_http_date(if_modified_since)
+    if client_ts is None:
+        return None
+    # Compare at second granularity (HTTP dates have 1s resolution).
+    if int(mtime) <= int(client_ts):
+        return Response(
+            status_code=304,
+            headers={
+                "Last-Modified": _http_date(mtime),
+                "Cache-Control": "public, max-age=0, must-revalidate",
+            },
+        )
+    return None
+
+
+def _blob_headers(blob_hash: str) -> dict[str, str]:
+    """Cache headers for content-addressed blobs.
+
+    Blobs are immutable by construction (sha256 hash = content identity).
+    Tell the browser to keep them forever and never revalidate.
+    """
+    return {
+        "Cache-Control": "public, max-age=31536000, immutable",
+        "ETag": f'"{blob_hash}"',
+    }
 
 
 @app.get("/api/config")
@@ -65,40 +139,103 @@ def list_runs(
     return result
 
 
+def _cached_json(
+    run_path: Path,
+    if_modified_since: str | None,
+    build: callable,  # type: ignore[valid-type]
+) -> Response:
+    """Shared flow for JSON listing endpoints: 304 when possible, else 200 with Last-Modified."""
+    from fastapi.responses import JSONResponse
+
+    not_mod = _not_modified(run_path, if_modified_since)
+    if not_mod is not None:
+        return not_mod
+    body = build()
+    return JSONResponse(content=body, headers=_listing_headers(run_path))
+
+
+def _blob_response(
+    data: bytes,
+    blob_hash: str,
+    if_none_match: str | None,
+    media_type: str = "application/octet-stream",
+) -> Response:
+    """Serve a content-addressed payload with long-lived cache + ETag."""
+    etag = f'"{blob_hash}"'
+    if if_none_match and if_none_match.strip() == etag:
+        return Response(status_code=304, headers=_blob_headers(blob_hash))
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers=_blob_headers(blob_hash),
+    )
+
+
 @app.get("/api/scalars/{run_path:path}")
-def get_scalars(run_path: str) -> dict:
+def get_scalars(
+    run_path: str,
+    if_modified_since: str | None = Header(default=None),
+) -> Response:
     """Get scalar data for a run. Returns {tag: [{it, value, timestamp}, ...]}."""
-    cache = get_cache(_resolve_run_path(run_path))
-    result: dict[str, list[dict]] = {}
-    for tag, data in cache.scalars.items():
-        result[tag] = [
-            {"it": it, "value": val, "ts": ts}
-            for it, val, ts in data
-        ]
-    return result
+    rp = _resolve_run_path(run_path)
+
+    def build() -> dict:
+        cache = get_cache(rp)
+        return {
+            tag: [{"it": it, "value": val, "ts": ts} for it, val, ts in data]
+            for tag, data in cache.scalars.items()
+        }
+
+    return _cached_json(rp, if_modified_since, build)
 
 
 @app.get("/api/text/{run_path:path}")
-def get_text(run_path: str) -> dict:
+def get_text(
+    run_path: str,
+    if_modified_since: str | None = Header(default=None),
+) -> Response:
     """Get text data for a run. Returns {tag: [{it, value}, ...]}."""
-    cache = get_cache(_resolve_run_path(run_path))
-    result: dict[str, list[dict]] = {}
-    for tag, data in cache.text.items():
-        result[tag] = [
-            {"it": it, "value": val}
-            for it, val in data
-        ]
-    return result
+    rp = _resolve_run_path(run_path)
+
+    def build() -> dict:
+        cache = get_cache(rp)
+        return {
+            tag: [{"it": it, "value": val} for it, val in data]
+            for tag, data in cache.text.items()
+        }
+
+    return _cached_json(rp, if_modified_since, build)
 
 
 @app.get("/api/figures/{run_path:path}")
-def get_figures_meta(run_path: str) -> dict:
+def get_figures_meta(
+    run_path: str,
+    if_modified_since: str | None = Header(default=None),
+) -> Response:
     """Get figure metadata (no image bytes). Returns {tag: [{it}, ...]}."""
-    cache = get_cache(_resolve_run_path(run_path))
-    result: dict[str, list[dict]] = {}
-    for tag, data in cache.figures.items():
-        result[tag] = [{"it": entry[0]} for entry in data]
-    return result
+    rp = _resolve_run_path(run_path)
+
+    def build() -> dict:
+        cache = get_cache(rp)
+        return {
+            tag: [{"it": entry[0]} for entry in data]
+            for tag, data in cache.figures.items()
+        }
+
+    return _cached_json(rp, if_modified_since, build)
+
+
+def _figure_etag(run_path: Path, tag: str, it: int, image_blob_hash: str) -> str:
+    """Stable ETag for a figure bytes response.
+
+    Prefer the content hash when available (true immutability); fall
+    back to run mtime + tag + it for inline figures. Either way, the
+    same figure from the same run returns the same ETag.
+    """
+    if image_blob_hash:
+        return f'"{image_blob_hash}"'
+    mtime = _events_mtime(run_path) or 0
+    return f'"{int(mtime)}-{tag}-{it}"'
 
 
 @app.get("/api/figure/{run_path:path}")
@@ -106,29 +243,55 @@ def get_figure_image(
     run_path: str,
     tag: str = Query(...),
     it: int = Query(...),
+    if_none_match: str | None = Header(default=None),
 ) -> Response:
     """Get a single figure image as PNG."""
-    cache = get_cache(_resolve_run_path(run_path))
+    rp = _resolve_run_path(run_path)
+    cache = get_cache(rp)
     figures = cache.figures.get(tag, [])
     for fig_it, image, image_blob_hash, _data, _data_blob, _interactive, _fmt in figures:
         if fig_it == it:
             png = image or (cache.get_blob(image_blob_hash) or b"")
             if png:
-                return Response(content=png, media_type="image/png")
+                etag = _figure_etag(rp, tag, it, image_blob_hash)
+                if if_none_match and if_none_match.strip() == etag:
+                    return Response(
+                        status_code=304,
+                        headers={
+                            "Cache-Control": "public, max-age=31536000, immutable",
+                            "ETag": etag,
+                        },
+                    )
+                return Response(
+                    content=png,
+                    media_type="image/png",
+                    headers={
+                        "Cache-Control": "public, max-age=31536000, immutable",
+                        "ETag": etag,
+                    },
+                )
     return Response(status_code=404, content=b"Figure not found")
 
 
 @app.get("/api/images/{run_path:path}")
-def get_images_meta(run_path: str) -> dict:
+def get_images_meta(
+    run_path: str,
+    if_modified_since: str | None = Header(default=None),
+) -> Response:
     """Get image metadata (no pixel data). Returns {tag: [{it, width, height}]}."""
-    cache = get_cache(_resolve_run_path(run_path))
-    result: dict[str, list[dict]] = {}
-    for tag, data in cache.images.items():
-        result[tag] = [
-            {"it": it, "width": w, "height": h}
-            for it, _png, _blob, w, h in data
-        ]
-    return result
+    rp = _resolve_run_path(run_path)
+
+    def build() -> dict:
+        cache = get_cache(rp)
+        return {
+            tag: [
+                {"it": it, "width": w, "height": h}
+                for it, _png, _blob, w, h in data
+            ]
+            for tag, data in cache.images.items()
+        }
+
+    return _cached_json(rp, if_modified_since, build)
 
 
 @app.get("/api/image/{run_path:path}")
@@ -136,40 +299,61 @@ def get_image(
     run_path: str,
     tag: str = Query(...),
     it: int = Query(...),
+    if_none_match: str | None = Header(default=None),
 ) -> Response:
     """Get a single image as PNG."""
-    cache = get_cache(_resolve_run_path(run_path))
+    rp = _resolve_run_path(run_path)
+    cache = get_cache(rp)
     images = cache.images.get(tag, [])
     for img_it, png_data, blob_hash, _w, _h in images:
         if img_it == it:
             png = png_data or (cache.get_blob(blob_hash) or b"")
             if png:
-                return Response(content=png, media_type="image/png")
+                etag = _figure_etag(rp, tag, it, blob_hash)
+                if if_none_match and if_none_match.strip() == etag:
+                    return Response(
+                        status_code=304,
+                        headers={
+                            "Cache-Control": "public, max-age=31536000, immutable",
+                            "ETag": etag,
+                        },
+                    )
+                return Response(
+                    content=png,
+                    media_type="image/png",
+                    headers={
+                        "Cache-Control": "public, max-age=31536000, immutable",
+                        "ETag": etag,
+                    },
+                )
     return Response(status_code=404, content=b"Image not found")
 
 
 @app.get("/api/cards/{run_path:path}")
-def get_cards_index(run_path: str) -> dict:
-    """List every named card in a run.
+def get_cards_index(
+    run_path: str,
+    if_modified_since: str | None = Header(default=None),
+) -> Response:
+    """List every named card in a run."""
+    rp = _resolve_run_path(run_path)
 
-    Returns ``{"cards": [{name, task, iterations, component_kinds}]}``.
-    Iteration order is ascending; ``component_kinds`` previews the
-    composition of the latest emission.
-    """
-    cache = get_cache(_resolve_run_path(run_path))
-    out: list[dict] = []
-    for (task, name), entries in cache.cards.items():
-        latest = entries[-1] if entries else (0, [])
-        out.append(
-            {
-                "name": name,
-                "task": task,
-                "iterations": [it for it, _ in entries],
-                "component_kinds": [c["kind"] for c in latest[1]],
-            }
-        )
-    out.sort(key=lambda c: (c["task"], c["name"]))
-    return {"cards": out}
+    def build() -> dict:
+        cache = get_cache(rp)
+        out: list[dict] = []
+        for (task, name), entries in cache.cards.items():
+            latest = entries[-1] if entries else (0, [])
+            out.append(
+                {
+                    "name": name,
+                    "task": task,
+                    "iterations": [it for it, _ in entries],
+                    "component_kinds": [c["kind"] for c in latest[1]],
+                }
+            )
+        out.sort(key=lambda c: (c["task"], c["name"]))
+        return {"cards": out}
+
+    return _cached_json(rp, if_modified_since, build)
 
 
 @app.get("/api/card/{run_path:path}")
@@ -178,7 +362,8 @@ def get_card(
     name: str = Query(...),
     task: str = Query(""),
     it: int | None = Query(None),
-) -> dict:
+    if_modified_since: str | None = Header(default=None),
+) -> Response:
     """Get a single card snapshot.
 
     When *it* is omitted, returns the latest emission. Components are
@@ -186,45 +371,62 @@ def get_card(
     must be fetched via the ``/api/blob`` endpoint using the hashes in
     each component dict.
     """
-    cache = get_cache(_resolve_run_path(run_path))
-    entries = cache.cards.get((task, name), [])
-    if not entries:
-        return {"name": name, "task": task, "it": None, "components": []}
-    if it is None:
-        chosen_it, components = entries[-1]
-    else:
-        chosen_it, components = entries[-1]
-        for ev_it, comps in entries:
-            if ev_it == it:
-                chosen_it, components = ev_it, comps
-                break
-    return {
-        "name": name,
-        "task": task,
-        "it": chosen_it,
-        "components": components,
-    }
+    rp = _resolve_run_path(run_path)
+
+    def build() -> dict:
+        cache = get_cache(rp)
+        entries = cache.cards.get((task, name), [])
+        if not entries:
+            return {"name": name, "task": task, "it": None, "components": []}
+        if it is None:
+            chosen_it, components = entries[-1]
+        else:
+            chosen_it, components = entries[-1]
+            for ev_it, comps in entries:
+                if ev_it == it:
+                    chosen_it, components = ev_it, comps
+                    break
+        return {
+            "name": name,
+            "task": task,
+            "it": chosen_it,
+            "components": components,
+        }
+
+    return _cached_json(rp, if_modified_since, build)
 
 
 @app.get("/api/tags/{run_path:path}")
-def get_tags(run_path: str) -> dict:
+def get_tags(
+    run_path: str,
+    if_modified_since: str | None = Header(default=None),
+) -> Response:
     """Unified listing of every (tag, kind) emitted in a run."""
-    cache = get_cache(_resolve_run_path(run_path))
-    return {"tags": cache.tags()}
+    rp = _resolve_run_path(run_path)
+
+    def build() -> dict:
+        cache = get_cache(rp)
+        return {"tags": cache.tags()}
+
+    return _cached_json(rp, if_modified_since, build)
 
 
 @app.get("/api/blob/{run_path:path}/{blob_hash}")
-def get_blob(run_path: str, blob_hash: str) -> Response:
+def get_blob(
+    run_path: str,
+    blob_hash: str,
+    if_none_match: str | None = Header(default=None),
+) -> Response:
     """Stream a content-addressed blob from the run's FileDatabase root.
 
-    The blob_hash is sha256 hex; payload type (PNG, plotly JSON,
-    pickled bytes) is determined by the caller.
+    Content-addressed: the blob_hash IS the content identity, so the
+    response can be cached forever. A matching If-None-Match yields 304.
     """
     cache = get_cache(_resolve_run_path(run_path))
     data = cache.get_blob(blob_hash)
     if data is None:
         return Response(status_code=404, content=b"blob not found")
-    return Response(content=data, media_type="application/octet-stream")
+    return _blob_response(data, blob_hash, if_none_match)
 
 
 @app.get("/api/flows")
