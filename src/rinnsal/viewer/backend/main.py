@@ -16,6 +16,7 @@ from rinnsal.viewer._data import (
     discover_flows,
     discover_runs,
     get_cache,
+    get_task_graph,
     is_run_directory,
 )
 
@@ -429,10 +430,57 @@ def get_blob(
     return _blob_response(data, blob_hash, if_none_match)
 
 
+def _flows_last_modified(root_path: Path) -> float | None:
+    """Max events.pb mtime across every run under the flows tree."""
+    flows_map = discover_flows(root_path)
+    latest: float | None = None
+    for runs in flows_map.values():
+        for run_dir in runs:
+            mt = _events_mtime(run_dir)
+            if mt is None:
+                continue
+            if latest is None or mt > latest:
+                latest = mt
+    return latest
+
+
+def _flows_not_modified(
+    root_path: Path, if_modified_since: str | None
+) -> Response | None:
+    if not if_modified_since:
+        return None
+    latest = _flows_last_modified(root_path)
+    if latest is None:
+        return None
+    client_ts = _parse_http_date(if_modified_since)
+    if client_ts is None:
+        return None
+    if int(latest) <= int(client_ts):
+        return Response(
+            status_code=304,
+            headers={
+                "Last-Modified": _http_date(latest),
+                "Cache-Control": "public, max-age=0, must-revalidate",
+            },
+        )
+    return None
+
+
+def _flows_headers(root_path: Path) -> dict[str, str]:
+    latest = _flows_last_modified(root_path)
+    if latest is None:
+        return {"Cache-Control": "no-cache"}
+    return {
+        "Cache-Control": "public, max-age=0, must-revalidate",
+        "Last-Modified": _http_date(latest),
+    }
+
+
 @app.get("/api/flows")
 def list_flows(
-    root: Annotated[str, Query(description="Root directory containing flows/")]
-) -> dict:
+    root: Annotated[str, Query(description="Root directory containing flows/")],
+    if_modified_since: str | None = Header(default=None),
+) -> Response:
     """List all flows and their aggregated task DAGs.
 
     Returns ``{flows: [{name, run_count, latest_run, nodes, edges}]}``.
@@ -442,6 +490,9 @@ def list_flows(
     the most recent run; edges are a union across all runs.
     """
     root_path = Path(root).resolve()
+    not_mod = _flows_not_modified(root_path, if_modified_since)
+    if not_mod is not None:
+        return not_mod
     flows_map = discover_flows(root_path)
 
     result_flows: list[dict] = []
@@ -518,7 +569,11 @@ def list_flows(
         )
 
     result_flows.sort(key=lambda f: f["name"])
-    return {"flows": result_flows}
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        content={"flows": result_flows},
+        headers=_flows_headers(root_path),
+    )
 
 
 @app.get("/api/flows/{flow_name}/tasks/{task_name}/history")
@@ -526,13 +581,17 @@ def task_history(
     flow_name: str,
     task_name: str,
     root: Annotated[str, Query(description="Root directory containing flows/")],
-) -> dict:
+    if_modified_since: str | None = Header(default=None),
+) -> Response:
     """Return per-run history for one task within a flow.
 
     Returns ``{history: [{run_id, status, duration, timestamp, error,
     task_hash}]}`` sorted newest-first.
     """
     root_path = Path(root).resolve()
+    not_mod = _flows_not_modified(root_path, if_modified_since)
+    if not_mod is not None:
+        return not_mod
     flows_map = discover_flows(root_path)
     runs = flows_map.get(flow_name, [])
 
@@ -540,7 +599,7 @@ def task_history(
 
     history: list[dict] = []
     for run_dir in runs:
-        cache = get_cache(run_dir)
+        cache = get_task_graph(run_dir)
         # Find the "best" TaskNode matching task_name in this run —
         # terminal states (success/failed) win over "cached", which only
         # marks a repeated reference within the same run.
@@ -577,7 +636,11 @@ def task_history(
             }
         )
 
-    return {"history": history}
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        content={"history": history},
+        headers=_flows_headers(root_path),
+    )
 
 
 def get_frontend_dist_path() -> Path:

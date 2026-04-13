@@ -404,8 +404,9 @@ class RunCache:
             return True
 
 
-# Module-level cache store
+# Module-level cache stores
 _run_caches: dict[Path, RunCache] = {}
+_task_graph_caches: dict[Path, "TaskGraphCache"] = {}
 
 
 def get_cache(log_path: Path) -> RunCache:
@@ -427,9 +428,85 @@ def get_cache(log_path: Path) -> RunCache:
     return cache
 
 
+class TaskGraphCache:
+    """Lightweight cache of a run's task_node + task_edge events.
+
+    The /api/flows aggregator walks every run under a flow dir. It only
+    needs task graph data, so skip the full event parse — figures,
+    plotly payloads, cards, blobs. This is orders of magnitude faster
+    on runs with lots of figures or a long training loop.
+    """
+
+    __slots__ = ("task_nodes", "task_edges", "file_mtime", "file_size")
+
+    def __init__(self) -> None:
+        self.task_nodes: list[tuple[str, str, str, float, str, float, str]] = []
+        self.task_edges: list[tuple[str, str]] = []
+        self.file_mtime: float = 0.0
+        self.file_size: int = 0
+
+    def load(self, events_path: Path) -> None:
+        from rinnsal.data.logger.event_file import EventFileReader
+
+        stat = events_path.stat()
+        self.file_mtime = stat.st_mtime
+        self.file_size = stat.st_size
+        self.task_nodes.clear()
+        self.task_edges.clear()
+
+        for event in EventFileReader(events_path):
+            dt = event.WhichOneof("data")
+            if dt == "task_node":
+                tn = event.task_node
+                self.task_nodes.append(
+                    (
+                        tn.task_name,
+                        tn.task_hash,
+                        tn.status,
+                        tn.duration,
+                        tn.error,
+                        event.timestamp,
+                        getattr(tn, "params", ""),
+                    )
+                )
+            elif dt == "task_edge":
+                te = event.task_edge
+                self.task_edges.append((te.from_task, te.to_task))
+            # Every other event type is skipped — crucial for speed.
+
+    def is_stale(self, events_path: Path) -> bool:
+        try:
+            stat = events_path.stat()
+        except OSError:
+            return True
+        return (
+            stat.st_mtime != self.file_mtime
+            or stat.st_size != self.file_size
+        )
+
+
+def get_task_graph(log_path: Path) -> TaskGraphCache:
+    """Return a task-graph-only cache; orders of magnitude cheaper than
+    ``get_cache`` when the caller only needs ``task_nodes``/``task_edges``.
+    """
+    events_path = log_path / EVENTS_FILE
+    cache = _task_graph_caches.get(log_path)
+    if cache is not None and not cache.is_stale(events_path):
+        return cache
+    cache = TaskGraphCache()
+    if events_path.exists():
+        try:
+            cache.load(events_path)
+        except (IOError, OSError):
+            pass
+    _task_graph_caches[log_path] = cache
+    return cache
+
+
 def invalidate_caches() -> None:
     """Force reload on next access (for Refresh button)."""
     _run_caches.clear()
+    _task_graph_caches.clear()
 
 
 def is_run_directory(path: Path) -> bool:
