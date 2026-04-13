@@ -5,8 +5,11 @@ import pytest
 from rinnsal.modeling.task import task
 from rinnsal.modeling.flow import flow
 from rinnsal.modeling.types import Resources, _normalize_resources
-from rinnsal.context import Card, current
+from rinnsal.context import current
 from rinnsal.data.database import InMemoryDatabase
+from rinnsal.data.file_store import FileDatabase
+from rinnsal.data.logger.components import Markdown, Scalar, Table
+from rinnsal.data.logger.logger import Logger
 from rinnsal.compute.inline import InlineExecutor
 from rinnsal.compute.engine import ExecutionEngine, set_engine, eval as rinnsal_eval
 
@@ -129,133 +132,97 @@ class TestResources:
         assert "resources" not in entry.metadata
 
 
-# ── Cards ────────────────────────────────────────────────────────────
+# ── Cards (unified Logger+Card API) ──────────────────────────────────
+#
+# A "card" is a named, user-composed grouping of components emitted
+# through the Logger. Cards are addressable by (task, name) and may be
+# re-emitted at multiple iterations.
 
 
-class TestCard:
-    def test_card_text(self):
-        card = Card()
-        card.text("Hello", title="Greeting")
-        assert len(card.items) == 1
-        assert card.items[0].kind == "text"
-        assert card.items[0].content == "Hello"
-        assert card.items[0].title == "Greeting"
+def _read_events(log_dir):
+    from rinnsal.data.logger.event_file import EventFileReader
 
-    def test_card_html(self):
-        card = Card()
-        card.html("<b>Bold</b>")
-        assert card.items[0].kind == "html"
-
-    def test_card_table(self):
-        card = Card()
-        card.table([[1, 2], [3, 4]], headers=["A", "B"])
-        item = card.items[0]
-        assert item.kind == "table"
-        assert item.content["headers"] == ["A", "B"]
-        assert item.content["rows"] == [[1, 2], [3, 4]]
-
-    def test_card_serialize(self):
-        card = Card()
-        card.text("Hello")
-        card.html("<b>World</b>")
-        serialized = card.serialize()
-        assert len(serialized) == 2
-        assert serialized[0]["kind"] == "text"
-        assert serialized[1]["kind"] == "html"
-
-    def test_card_is_empty(self):
-        card = Card()
-        assert card.is_empty()
-        card.text("Hello")
-        assert not card.is_empty()
+    return list(EventFileReader(log_dir / "events.pb").read_all())
 
 
-class TestCurrentContext:
-    def test_current_card_lazy_creation(self):
-        card = current.card
-        assert isinstance(card, Card)
-        # Same card on repeated access
-        assert current.card is card
-        current._reset()
+class TestCardBuilderSmoke:
+    def test_builder_append_and_commit(self, tmp_path):
+        logger = Logger(tmp_path / "logs")
+        card = logger.card("report")
+        card.append(Markdown("# hello"))
+        card.append(Scalar(1.0))
+        card.commit()
+        logger.close()
 
-    def test_current_reset_returns_card(self):
-        current.card.text("test")
-        card = current._reset()
-        assert card is not None
-        assert len(card.items) == 1
+        events = _read_events(logger.log_dir)
+        assert len(events) == 1
+        assert events[0].WhichOneof("data") == "card_event"
+        assert events[0].card_event.name == "report"
+        assert len(events[0].card_event.components) == 2
 
-    def test_current_reset_clears(self):
-        current.card.text("test")
-        current._reset()
-        # After reset, new card is created
-        assert current.card.is_empty()
-        current._reset()
+    def test_context_manager(self, tmp_path):
+        logger = Logger(tmp_path / "logs")
+        with logger.card("auto") as c:
+            c.append(Markdown("auto-committed"))
+            c.append(Table([[1, 2]], headers=["a", "b"]))
+        logger.close()
 
-    def test_current_reset_empty_returns_none(self):
-        _ = current.card  # Create empty card
-        card = current._reset()
-        assert card is None
+        events = _read_events(logger.log_dir)
+        assert len(events) == 1
+        assert len(events[0].card_event.components) == 2
+
+    def test_iteration_slider(self, tmp_path):
+        logger = Logger(tmp_path / "logs")
+        for it in (1, 2, 3):
+            logger.set_iteration(it)
+            with logger.card("train") as c:
+                c.append(Scalar(1.0 / it))
+        logger.close()
+
+        events = _read_events(logger.log_dir)
+        assert [e.iteration for e in events] == [1, 2, 3]
+        assert all(e.card_event.name == "train" for e in events)
 
 
-class TestCardsIntegration:
-    def test_card_in_task_inline(self, engine):
+class TestCardsFromTasks:
+    """A task composes a card through current.logger; the card lands in
+    the flow run's events.pb."""
+
+    def test_card_from_task_in_flow(self, tmp_path, monkeypatch):
+        # Run from tmp_path so FlowResult's default db_path=".rinnsal"
+        # lands inside the test directory.
+        monkeypatch.chdir(tmp_path)
+        db = FileDatabase(root=tmp_path / ".rinnsal")
+
         @task
-        def my_task():
-            current.card.text("Task completed!")
+        def analyze():
+            with current.logger.card("summary") as card:
+                card.append(Markdown("## summary"))
+                card.append(Scalar(0.99))
             return 42
 
-        result = rinnsal_eval(my_task())
-        assert result == 42
+        @flow
+        def f():
+            return analyze()
 
-    def test_card_stored_in_metadata(self, engine_with_db, db):
-        @task
-        def my_task():
-            current.card.text("Result summary", title="Summary")
-            current.card.html("<b>Done</b>")
-            return 42
+        # Drive the flow with an engine bound to our FileDatabase so the
+        # run directory (and events.pb) are created under tmp_path.
+        executor = InlineExecutor()
+        engine = ExecutionEngine(executor=executor, database=db)
+        set_engine(engine)
+        try:
+            result = f().run()
+        finally:
+            engine.shutdown()
+        assert result.result == 42
 
-        expr = my_task()
-        rinnsal_eval(expr)
-
-        entry = db.fetch_task_result(expr.hash, expr.task_name)
-        assert "card" in entry.metadata
-        card_data = entry.metadata["card"]
-        assert len(card_data) == 2
-        assert card_data[0]["kind"] == "text"
-        assert card_data[0]["content"] == "Result summary"
-        assert card_data[1]["kind"] == "html"
-
-    def test_no_card_no_metadata_key(self, engine_with_db, db):
-        @task
-        def simple():
-            return 42
-
-        expr = simple()
-        rinnsal_eval(expr)
-
-        entry = db.fetch_task_result(expr.hash, expr.task_name)
-        assert "card" not in entry.metadata
-
-    def test_card_on_failure_not_stored(self, engine):
-        @task
-        def broken():
-            current.card.text("Before crash")
-            raise RuntimeError("boom")
-
-        with pytest.raises(RuntimeError, match="boom"):
-            rinnsal_eval(broken())
-
-    def test_card_with_catch(self, engine_with_db, db):
-        """When catch=True and task fails, card is not stored (failure path)."""
-
-        @task(catch=True)
-        def risky():
-            raise RuntimeError("fail")
-
-        expr = risky()
-        result = rinnsal_eval(expr)
-        assert result is None
-
-        # The catch path in engine doesn't capture cards from failed attempts
-        entry = db.fetch_task_result(expr.hash, expr.task_name)
-        assert "card" not in entry.metadata
+        # The logger writes events.pb into the run dir under .rinnsal/flows/...
+        # (sibling JSON files from FileDatabase.store_flow_run are excluded).
+        runs_root = tmp_path / ".rinnsal" / "flows" / "f" / "runs"
+        run_dirs = sorted(p for p in runs_root.iterdir() if p.is_dir())
+        assert run_dirs, "no run directory created"
+        events = _read_events(run_dirs[-1])
+        card_events = [e for e in events if e.WhichOneof("data") == "card_event"]
+        assert len(card_events) == 1
+        assert card_events[0].card_event.name == "summary"
+        assert card_events[0].card_event.task == "analyze"

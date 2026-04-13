@@ -71,7 +71,23 @@ def fit_model(data, degree: int = 5):
     coeffs = [0.1 * ((-1) ** i) / (i + 1) for i in range(degree + 1)]
 
     logger.add_text("model/info", f"Polynomial degree={degree}")
-    current.card.text(f"Fitted polynomial of degree {degree}")
+    logger.add_markdown("model/summary", f"Fitted polynomial of degree **{degree}**")
+
+    # Optional: interactive Plotly figure, if the extra is installed.
+    try:
+        import plotly.graph_objects as go
+
+        pfig = go.Figure(
+            data=[go.Scatter(x=list(range(len(losses))), y=losses, mode="lines+markers")]
+        )
+        pfig.update_layout(
+            title="Training loss (interactive)",
+            xaxis_title="Epoch",
+            yaxis_title="Loss",
+        )
+        logger.add_plotly("train/loss_interactive", pfig)
+    except ImportError:
+        pass  # plotly extra not installed; skip the interactive demo
 
     return {"coeffs": coeffs, "degree": degree, "x": x, "y": y}
 
@@ -127,10 +143,11 @@ def plot_results(model):
     logger.add_scalar("eval/rmse", rmse)
     logger.add_scalar("eval/n_points", len(x))
 
-    current.card.text(
-        f"RMSE: {rmse:.4f}\n"
-        f"Points: {len(x)}\n"
-        f"Degree: {degree}"
+    logger.add_markdown(
+        "eval/summary",
+        f"**RMSE:** {rmse:.4f}\n\n"
+        f"**Points:** {len(x)}\n\n"
+        f"**Degree:** {degree}",
     )
 
     return {"rmse": rmse}

@@ -10,7 +10,7 @@ import pytest
 from rinnsal.modeling.task import task
 from rinnsal.modeling.flow import flow, FlowResult
 from rinnsal.modeling.registry import get_registry
-from rinnsal.context import Checkpoint, Card, current
+from rinnsal.context import Checkpoint, current
 from rinnsal.data.database import InMemoryDatabase
 from rinnsal.data.file_store import FileDatabase
 from rinnsal.compute.inline import InlineExecutor
@@ -103,7 +103,7 @@ class TestCheckpoint:
         cp = Checkpoint(path=None)
         current._set_checkpoint(cp)
         assert current.checkpoint is cp
-        current._reset()
+        current._reset_checkpoint()
 
     def test_checkpoint_in_task_with_file_db(self, engine_with_file_db):
         """Checkpoint is accessible inside a task when using FileDatabase."""

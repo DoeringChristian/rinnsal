@@ -66,13 +66,15 @@ def train(epochs: int = 10, lr: float = 0.01):
         "status", f"Training complete. Final loss: {losses[-1]:.4f}"
     )
 
-    # Also add to card for the Cards tab
-    current.card.text(f"Trained for {epochs} epochs with lr={lr}")
-    current.card.table(
-        [[i + 1, f"{losses[i]:.4f}"] for i in range(epochs)],
-        title="Loss per Epoch",
-        headers=["Epoch", "Loss"],
-    )
+    # Also compose a card for the Cards section.
+    from rinnsal.data.logger.components import Markdown, Table
+
+    with logger.card("training_run") as card:
+        card.append(Markdown(f"Trained for **{epochs}** epochs with **lr={lr}**"))
+        card.append(Table(
+            [[i + 1, f"{losses[i]:.4f}"] for i in range(epochs)],
+            headers=["Epoch", "Loss"],
+        ))
 
     return {"final_loss": losses[-1]}
 
@@ -91,11 +93,13 @@ def evaluate(train_result):
         logger.add_scalar("eval/accuracy", test_acc)
         logger.add_text("eval/result", f"Test accuracy: {test_acc:.4f}")
 
-    current.card.html(
-        f"<h3>Evaluation Results</h3>"
-        f"<p>Test Loss: <b>{test_loss:.4f}</b></p>"
-        f"<p>Test Accuracy: <b>{test_acc:.4f}</b></p>"
-    )
+    if logger:
+        from rinnsal.data.logger.components import Markdown
+
+        with logger.card("evaluation") as card:
+            card.append(Markdown("### Evaluation results"))
+            card.append(Markdown(f"**Test loss:** {test_loss:.4f}"))
+            card.append(Markdown(f"**Test accuracy:** {test_acc:.4f}"))
 
     return {"test_loss": test_loss, "test_accuracy": test_acc}
 

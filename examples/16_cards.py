@@ -1,52 +1,40 @@
 #!/usr/bin/env python3
-"""Cards - attach rich content to task results.
+"""Cards — user-composed reports built from typed components.
 
-Tasks can add text, HTML, images, and tables to a card via
-``current.card``. When running flows, card events are automatically
-logged to the run's events.pb file and are viewable in the web viewer.
-
-Card types:
-- ``current.card.text(content, title="")`` - Markdown/text content
-- ``current.card.html(content, title="")`` - Raw HTML content
-- ``current.card.table(data, title="", headers=None)`` - Tables from lists or DataFrames
-- ``current.card.image(figure, title="")`` - Matplotlib figures
+A card is a named grouping of components (Markdown, Table, Image, Plotly,
+Scalar, ...) that the user explicitly assembles inside a task. Cards can
+be re-emitted at multiple iterations; the viewer shows a slider.
 
 Usage:
     python examples/16_cards.py
-
-Then view the cards in the web viewer:
-    python -m rinnsal.viewer
+    python -m rinnsal.viewer   # view the composed cards
 """
 
 from rinnsal import task, flow, current
+from rinnsal.data.logger.components import (
+    Artifact,
+    Markdown,
+    ProgressBar,
+    PythonCode,
+    Scalar,
+    Table,
+)
 
 import matplotlib.pyplot as plt
 
 
 @task
 def train(lr: float = 0.01, epochs: int = 5):
-    """Train a model and record metrics on its card."""
-    metrics = []
-    losses = []
-    accs = []
+    """Train a model and build a composed report card for this run."""
+    losses, accs = [], []
+    metrics_rows = []
     for epoch in range(epochs):
         loss = 1.0 / (epoch + 1 + lr * 10)
         acc = 1.0 - loss
-        metrics.append([epoch + 1, f"{loss:.4f}", f"{acc:.4f}"])
         losses.append(loss)
         accs.append(acc)
+        metrics_rows.append([epoch + 1, f"{loss:.4f}", f"{acc:.4f}"])
 
-    # Add text card
-    current.card.text(f"Trained for {epochs} epochs with lr={lr}")
-
-    # Add table card
-    current.card.table(
-        metrics,
-        title="Training Metrics",
-        headers=["Epoch", "Loss", "Accuracy"],
-    )
-
-    # Add image card (matplotlib figure)
     fig, ax = plt.subplots(figsize=(6, 4))
     ax.plot(range(1, epochs + 1), losses, label="Loss", marker="o")
     ax.plot(range(1, epochs + 1), accs, label="Accuracy", marker="s")
@@ -55,54 +43,60 @@ def train(lr: float = 0.01, epochs: int = 5):
     ax.set_title(f"Training Progress (lr={lr})")
     ax.legend()
     ax.grid(True, alpha=0.3)
-    current.card.image(fig, title="Training Curves")
+
+    # Compose a card for this task run.
+    with current.logger.card(f"train_lr_{lr}") as card:
+        card.append(Markdown(f"# Training run · lr={lr}"))
+        card.append(Markdown(f"Trained for **{epochs}** epochs."))
+        card.append(Table(metrics_rows, headers=["Epoch", "Loss", "Accuracy"]))
+        card.append(fig)  # auto-detected as Figure (matplotlib)
+        card.append(Markdown(f"Final accuracy: **{accs[-1]:.4f}**"))
+
     plt.close(fig)
 
-    # Add HTML card
-    current.card.html(f"<p>Final accuracy: <b>{metrics[-1][2]}</b></p>")
-
-    return {"loss": float(metrics[-1][1]), "accuracy": float(metrics[-1][2])}
+    return {"lr": lr, "loss": losses[-1], "accuracy": accs[-1]}
 
 
 @task
-def compare(results):
-    """Compare multiple training runs."""
+def compare(r0: dict, r1: dict, r2: dict):
+    """Summarize and compare multiple training runs in a single card."""
+    results = [r0, r1, r2]
     rows = [
-        [
-            r["lr"],
-            f"{r['result']['loss']:.4f}",
-            f"{r['result']['accuracy']:.4f}",
-        ]
+        [r["lr"], f"{r['loss']:.4f}", f"{r['accuracy']:.4f}"]
         for r in results
     ]
-    current.card.text("## Comparison of training runs")
-    current.card.table(rows, headers=["LR", "Loss", "Accuracy"])
+    best = max(results, key=lambda r: r["accuracy"])
 
-    best = max(results, key=lambda r: r["result"]["accuracy"])
-    current.card.text(f"Best LR: **{best['lr']}**")
+    with current.logger.card("comparison") as card:
+        card.append(Markdown("## Comparison of training runs"))
+        card.append(Table(rows, headers=["LR", "Loss", "Accuracy"]))
+        card.append(Markdown(f"**Best LR:** `{best['lr']}`"))
+        card.append(Scalar(best["accuracy"]))
+        # Any Python value can be appended directly — autodetect routes
+        # dicts/lists/numbers to the Artifact component (rendered + pickled).
+        card.append({"loss": best["loss"], "accuracy": best["accuracy"]})
+        card.append([r["accuracy"] for r in results])
+        card.append(PythonCode(
+            "best = max(results, key=lambda r: r['accuracy'])",
+            language="python",
+        ))
+        card.append(ProgressBar(
+            value=best["accuracy"], total=1.0, label="best accuracy"
+        ))
+
     return best
 
 
 @flow
 def experiment():
-    learning_rates = [0.001, 0.01, 0.1]
-    models = []
-    for lr in learning_rates:
-        m = train(lr=lr)
-        models.append(m)
-
-    # Wrap results with their LR for comparison
-    return models
+    a = train(lr=0.001)
+    b = train(lr=0.01)
+    c = train(lr=0.1)
+    return compare(a, b, c)
 
 
 if __name__ == "__main__":
-    result = experiment()
-    result.run()
-
-    for t in result:
-        print(f"{t.task_name}: {t.result}")
-
-    # Cards are automatically logged to events.pb during flow execution.
-    # View them in the web viewer:
+    result = experiment().run()
+    print(f"\nResult: {result.result}")
     print("\nCards logged to .rinnsal/flows/experiment/runs/")
     print("View with: python -m rinnsal.viewer")

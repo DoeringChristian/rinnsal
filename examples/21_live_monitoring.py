@@ -97,15 +97,19 @@ def monitor():
                 f"acc={accuracy:.4f}",
             )
 
-        # Log a card summary every 50 epochs
+        # Compose a checkpoint card every 50 epochs.
         if epoch % 50 == 0 and epoch > 0:
-            current.card.text(
-                f"Checkpoint at epoch {epoch}\n"
-                f"  Train loss: {loss:.4f}\n"
-                f"  Val loss:   {val_loss:.4f}\n"
-                f"  Accuracy:   {accuracy:.4f}\n"
-                f"  LR:         {lr:.6f}"
-            )
+            from rinnsal.data.logger.components import Markdown, Scalar
+
+            with logger.card("checkpoint") as card:
+                card.append(Markdown(f"## Checkpoint at epoch {epoch}"))
+                card.append(Markdown(
+                    f"- Train loss: **{loss:.4f}**\n"
+                    f"- Val loss: **{val_loss:.4f}**\n"
+                    f"- Accuracy: **{accuracy:.4f}**\n"
+                    f"- LR: **{lr:.6f}**"
+                ))
+                card.append(Scalar(loss))
 
         epoch += 1
         time.sleep(1)  # 1 epoch per second

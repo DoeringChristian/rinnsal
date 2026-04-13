@@ -6,6 +6,7 @@ and logging configuration and results to cards for visualization.
 """
 
 from rinnsal import task, flow, Config, current
+from rinnsal.data.logger.components import Markdown, Table
 
 
 @task
@@ -13,13 +14,14 @@ def train(config: Config):
     print(f"Training with lr={config.lr}, epochs={config.epochs}")
     acc = 0.5 + config.lr * config.epochs * 0.01
 
-    # Log config and result to card
-    current.card.text(f"**Configuration:**\n- lr: {config.lr}\n- epochs: {config.epochs}")
-    current.card.table(
-        [[config.lr, config.epochs, f"{acc:.4f}"]],
-        title="Training Result",
-        headers=["Learning Rate", "Epochs", "Accuracy"],
-    )
+    with current.logger.card("training_summary") as card:
+        card.append(Markdown(
+            f"**Configuration:**\n- lr: {config.lr}\n- epochs: {config.epochs}"
+        ))
+        card.append(Table(
+            [[config.lr, config.epochs, f"{acc:.4f}"]],
+            headers=["Learning Rate", "Epochs", "Accuracy"],
+        ))
 
     return {"acc": acc}
 
@@ -29,12 +31,10 @@ def evaluate(result, threshold=0.8):
     passed = result["acc"] >= threshold
     status = "PASSED" if passed else "FAILED"
 
-    # Log evaluation to card
-    current.card.html(
-        f"<p>Accuracy: <b>{result['acc']:.4f}</b></p>"
-        f"<p>Threshold: {threshold}</p>"
-        f"<p>Status: <span style='color: {'green' if passed else 'red'}'>{status}</span></p>"
-    )
+    with current.logger.card("evaluation") as card:
+        card.append(Markdown(f"**Accuracy:** {result['acc']:.4f}"))
+        card.append(Markdown(f"**Threshold:** {threshold}"))
+        card.append(Markdown(f"**Status:** {status}"))
 
     return {"acc": result["acc"], "passed": passed}
 
