@@ -2,7 +2,7 @@
 
 import pytest
 
-from rinnsal.core.hashing import (
+from rinnsal.modeling.hashing import (
     compute_task_hash,
     hash_args,
     hash_function,

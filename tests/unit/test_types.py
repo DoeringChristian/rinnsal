@@ -4,7 +4,7 @@ import pytest
 from datetime import datetime
 from pathlib import Path
 
-from rinnsal.core.types import Config, Entry, Runs, Snapshot
+from rinnsal.modeling.types import Config, Entry, Runs, Snapshot
 
 
 class TestConfig:

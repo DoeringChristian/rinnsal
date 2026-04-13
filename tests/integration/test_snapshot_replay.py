@@ -5,16 +5,16 @@ from unittest import mock
 
 import pytest
 
-from rinnsal.core.task import task
-from rinnsal.core.flow import flow
-from rinnsal.core.snapshot import (
+from rinnsal.modeling.task import task
+from rinnsal.modeling.flow import flow
+from rinnsal.versioning.snapshot import (
     use_snapshot,
     _invalidate_project_modules,
     _resolve_snapshot_hash,
 )
-from rinnsal.persistence.database import InMemoryDatabase
-from rinnsal.execution.inline import InlineExecutor
-from rinnsal.runtime.engine import ExecutionEngine, set_engine, eval as rinnsal_eval
+from rinnsal.data.database import InMemoryDatabase
+from rinnsal.compute.inline import InlineExecutor
+from rinnsal.compute.engine import ExecutionEngine, set_engine, eval as rinnsal_eval
 
 
 @pytest.fixture

@@ -14,7 +14,7 @@ from unittest import mock
 
 import pytest
 
-from rinnsal.core.snapshot import (
+from rinnsal.versioning.snapshot import (
     SnapshotManager,
     find_git_root,
     _SKIP_DIRS,
@@ -102,7 +102,7 @@ class TestGitLsFilesIntegration:
 
         with mock.patch("inspect.getfile", return_value=str(repo / "main.py")):
             with mock.patch(
-                "rinnsal.core.snapshot.find_git_root", return_value=repo
+                "rinnsal.versioning.snapshot.find_git_root", return_value=repo
             ):
                 h, snap_path = manager.create_snapshot(dummy)
 
@@ -403,7 +403,7 @@ class TestFallbackBehavior:
         # Default patterns (no git → ["*.py"])
         manager = SnapshotManager()
         with mock.patch(
-            "rinnsal.core.snapshot.find_git_root", return_value=None
+            "rinnsal.versioning.snapshot.find_git_root", return_value=None
         ):
             files = manager._get_file_list(repo)
 
@@ -420,7 +420,7 @@ class TestFallbackBehavior:
 
         manager = SnapshotManager(include_patterns=["*.py", "*.yaml"])
         with mock.patch(
-            "rinnsal.core.snapshot.find_git_root", return_value=None
+            "rinnsal.versioning.snapshot.find_git_root", return_value=None
         ):
             files = manager._get_file_list(repo)
 
@@ -463,7 +463,7 @@ class TestSnapshotDeduplication:
 
         with mock.patch("inspect.getfile", return_value=str(repo / "main.py")):
             with mock.patch(
-                "rinnsal.core.snapshot.find_git_root", return_value=None
+                "rinnsal.versioning.snapshot.find_git_root", return_value=None
             ):
                 h1, p1 = manager.create_snapshot(dummy)
                 # Second call should reuse

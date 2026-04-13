@@ -2,8 +2,8 @@
 
 import pytest
 
-from rinnsal.core.graph import DAG
-from rinnsal.core.task import task
+from rinnsal.modeling.graph import DAG
+from rinnsal.modeling.task import task
 
 
 class TestDAG:

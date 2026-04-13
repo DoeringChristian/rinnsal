@@ -2,12 +2,12 @@
 
 import pytest
 
-from rinnsal.core.task import task
-from rinnsal.core.registry import get_registry
-from rinnsal.persistence.database import InMemoryDatabase
-from rinnsal.persistence.file_store import FileDatabase
-from rinnsal.runtime.engine import ExecutionEngine
-from rinnsal.execution.inline import InlineExecutor
+from rinnsal.modeling.task import task
+from rinnsal.modeling.registry import get_registry
+from rinnsal.data.database import InMemoryDatabase
+from rinnsal.data.file_store import FileDatabase
+from rinnsal.compute.engine import ExecutionEngine
+from rinnsal.compute.inline import InlineExecutor
 
 
 class TestInMemoryDeduplication:

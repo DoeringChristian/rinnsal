@@ -3,8 +3,8 @@
 import pytest
 from datetime import datetime
 
-from rinnsal.core.types import Entry
-from rinnsal.persistence.database import InMemoryDatabase
+from rinnsal.modeling.types import Entry
+from rinnsal.data.database import InMemoryDatabase
 
 
 class TestInMemoryDatabase:

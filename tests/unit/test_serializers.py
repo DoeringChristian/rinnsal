@@ -3,7 +3,7 @@
 import pytest
 from pathlib import Path
 
-from rinnsal.persistence.serializers import (
+from rinnsal.data.serializers import (
     JSONSerializer,
     PickleSerializer,
     HybridSerializer,

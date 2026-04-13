@@ -2,14 +2,14 @@
 
 import pytest
 
-from rinnsal.core.expression import (
+from rinnsal.modeling.expression import (
     Expression,
     TaskExpression,
     ValueExpression,
     unwrap_value,
     wrap_value,
 )
-from rinnsal.core.task import TaskDef
+from rinnsal.modeling.task import TaskDef
 
 
 class TestValueExpression:

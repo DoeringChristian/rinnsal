@@ -2,9 +2,9 @@
 
 import pytest
 
-from rinnsal.core.registry import get_registry
-from rinnsal.runtime.engine import ExecutionEngine, set_engine
-from rinnsal.execution.inline import InlineExecutor
+from rinnsal.modeling.registry import get_registry
+from rinnsal.compute.engine import ExecutionEngine, set_engine
+from rinnsal.compute.inline import InlineExecutor
 
 
 @pytest.fixture(autouse=True)

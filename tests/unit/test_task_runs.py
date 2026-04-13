@@ -4,8 +4,8 @@ import time
 
 import pytest
 
-from rinnsal.core.types import Entry, Runs, TaskRuns
-from rinnsal.persistence.file_store import FileDatabase, set_database
+from rinnsal.modeling.types import Entry, Runs, TaskRuns
+from rinnsal.data.file_store import FileDatabase, set_database
 
 
 @pytest.fixture

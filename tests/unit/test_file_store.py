@@ -5,8 +5,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from rinnsal.core.types import Entry, Snapshot
-from rinnsal.persistence.file_store import FileDatabase
+from rinnsal.modeling.types import Entry, Snapshot
+from rinnsal.data.file_store import FileDatabase
 
 
 @pytest.fixture

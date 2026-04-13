@@ -21,7 +21,7 @@ def add_builtin_flags(parser: argparse.ArgumentParser) -> None:
         type=str,
         default="subprocess",
         help=(
-            "Executor to use: inline, subprocess, ray, slurm, "
+            "Executor to use: inline, subprocess, slurm, "
             "ssh:[user@]host (live), or pssh:[user@]host (persistent). "
             "e.g. --executor ssh:rgllab or --executor pssh:host1,host2"
         ),

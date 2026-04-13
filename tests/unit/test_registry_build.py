@@ -2,7 +2,7 @@
 
 import pytest
 
-from rinnsal.core.registry_build import (
+from rinnsal.modeling.registry_build import (
     register,
     build,
     get_registry,
@@ -150,7 +150,7 @@ class TestBuild:
 
 class TestBuildWithConfig:
     def test_build_from_config_object(self):
-        from rinnsal.core.types import Config
+        from rinnsal.modeling.types import Config
 
         @register
         class Model:
@@ -163,7 +163,7 @@ class TestBuildWithConfig:
         assert obj.size == 42
 
     def test_build_from_nested_config(self):
-        from rinnsal.core.types import Config
+        from rinnsal.modeling.types import Config
 
         @register
         class Model:

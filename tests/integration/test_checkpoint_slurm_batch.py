@@ -7,14 +7,14 @@ from unittest import mock
 
 import pytest
 
-from rinnsal.core.task import task
-from rinnsal.core.flow import flow, FlowResult
-from rinnsal.core.registry import get_registry
+from rinnsal.modeling.task import task
+from rinnsal.modeling.flow import flow, FlowResult
+from rinnsal.modeling.registry import get_registry
 from rinnsal.context import Checkpoint, Card, current
-from rinnsal.persistence.database import InMemoryDatabase
-from rinnsal.persistence.file_store import FileDatabase
-from rinnsal.execution.inline import InlineExecutor
-from rinnsal.runtime.engine import ExecutionEngine, set_engine, eval as rinnsal_eval
+from rinnsal.data.database import InMemoryDatabase
+from rinnsal.data.file_store import FileDatabase
+from rinnsal.compute.inline import InlineExecutor
+from rinnsal.compute.engine import ExecutionEngine, set_engine, eval as rinnsal_eval
 
 
 @pytest.fixture
@@ -276,7 +276,7 @@ class TestBatchExecution:
 
 class TestSlurmExecutor:
     def test_sbatch_script_generation(self, tmp_path):
-        from rinnsal.execution.slurm import _make_sbatch_script
+        from rinnsal.compute.slurm import _make_sbatch_script
 
         script = _make_sbatch_script(
             task_name="train",
@@ -307,7 +307,7 @@ class TestSlurmExecutor:
         assert "python3 /tmp/worker.py" in script
 
     def test_sbatch_script_no_gpu(self):
-        from rinnsal.execution.slurm import _make_sbatch_script
+        from rinnsal.compute.slurm import _make_sbatch_script
 
         script = _make_sbatch_script(
             task_name="preprocess",
@@ -331,7 +331,7 @@ class TestSlurmExecutor:
         assert "#SBATCH --mem" not in script
 
     def test_worker_script_generation(self):
-        from rinnsal.execution.slurm import _make_worker_script
+        from rinnsal.compute.slurm import _make_worker_script
 
         script = _make_worker_script(
             submission_pkl="/tmp/sub.pkl",
@@ -344,7 +344,7 @@ class TestSlurmExecutor:
         assert '"error"' in script
 
     def test_worker_script_with_checkpoint(self):
-        from rinnsal.execution.slurm import _make_worker_script
+        from rinnsal.compute.slurm import _make_worker_script
 
         script = _make_worker_script(
             submission_pkl="/tmp/sub.pkl",
@@ -356,7 +356,7 @@ class TestSlurmExecutor:
         assert "/tmp/checkpoint.dat" in script
 
     def test_slurm_executor_init(self):
-        from rinnsal.execution.slurm import SlurmExecutor
+        from rinnsal.compute.slurm import SlurmExecutor
 
         executor = SlurmExecutor(
             partition="gpu",

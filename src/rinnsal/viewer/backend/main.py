@@ -150,8 +150,8 @@ def get_cards(run_path: str) -> dict:
     cache = get_cache(_resolve_run_path(run_path))
     # Cards are stored differently — need to read from events directly
     # For now, read from the events.pb if cards exist
-    from rinnsal.logger.event_file import EventFileReader
-    from rinnsal.logger.logger import EVENTS_FILE
+    from rinnsal.data.logger.event_file import EventFileReader
+    from rinnsal.data.logger.logger import EVENTS_FILE
 
     events_path = _resolve_run_path(run_path) / EVENTS_FILE
     result: dict[str, list[dict]] = {}

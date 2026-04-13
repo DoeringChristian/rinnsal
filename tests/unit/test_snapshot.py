@@ -8,7 +8,7 @@ from unittest import mock
 
 import pytest
 
-from rinnsal.core.snapshot import (
+from rinnsal.versioning.snapshot import (
     SnapshotManager,
     find_git_root,
     build_pythonpath,
@@ -180,13 +180,13 @@ class TestGlobalSnapshotManager:
 
 class TestExecutorSnapshotDefault:
     def test_subprocess_executor_snapshot_default_true(self):
-        from rinnsal.execution.subprocess import SubprocessExecutor
+        from rinnsal.compute.subprocess import SubprocessExecutor
 
         executor = SubprocessExecutor(max_workers=1)
         assert executor.snapshot is True
 
     def test_subprocess_executor_snapshot_can_disable(self):
-        from rinnsal.execution.subprocess import SubprocessExecutor
+        from rinnsal.compute.subprocess import SubprocessExecutor
 
         executor = SubprocessExecutor(max_workers=1, snapshot=False)
         assert executor.snapshot is False

@@ -2,8 +2,8 @@
 
 import pytest
 
-from rinnsal.core.task import TaskDef, task
-from rinnsal.core.expression import TaskExpression
+from rinnsal.modeling.task import TaskDef, task
+from rinnsal.modeling.expression import TaskExpression
 
 
 class TestTaskDecorator:

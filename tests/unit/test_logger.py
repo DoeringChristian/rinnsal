@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from rinnsal.logger import LazyFigure, Logger, LogReader
+from rinnsal.data.logger import LazyFigure, Logger, LogReader
 
 
 class MockFigure:

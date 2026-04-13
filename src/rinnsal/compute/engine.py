@@ -1,0 +1,598 @@
+"""DAG evaluation engine."""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import TYPE_CHECKING, Any, overload
+
+from rinnsal.modeling.expression import TaskExpression, ValueExpression
+from rinnsal.modeling.graph import DAG
+from rinnsal.modeling.types import Entry
+from rinnsal.compute.executor import Executor
+from rinnsal.compute.inline import InlineExecutor
+
+if TYPE_CHECKING:
+    from rinnsal.data.logger import Logger
+
+
+def _summarize_value(v: Any, max_len: int = 200) -> Any:
+    """Summarize a single value for parameter recording.
+
+    - Scalars (int, float, bool, str, None): kept as-is
+    - Dicts / Config objects: recursively summarized (full layout)
+    - Lists/tuples: summarized with length + first few elements
+    - Other objects: type name + repr truncated
+    """
+    if v is None or isinstance(v, (bool, int, float)):
+        return v
+    if isinstance(v, str):
+        return v if len(v) <= max_len else v[:max_len] + "..."
+    if isinstance(v, dict):
+        return {str(k): _summarize_value(val) for k, val in v.items()}
+    # Handle dataclasses and attrs
+    if hasattr(v, "__dataclass_fields__"):
+        return {
+            k: _summarize_value(getattr(v, k))
+            for k in v.__dataclass_fields__
+        }
+    if hasattr(v, "__attrs_attrs__"):
+        return {
+            a.name: _summarize_value(getattr(v, a.name))
+            for a in v.__attrs_attrs__
+        }
+    # Config-like objects with a dict representation
+    if hasattr(v, "to_dict"):
+        try:
+            return _summarize_value(v.to_dict())
+        except Exception:
+            pass
+    if isinstance(v, (list, tuple)):
+        t = type(v).__name__
+        n = len(v)
+        if n <= 5:
+            return [_summarize_value(x) for x in v]
+        preview = [_summarize_value(x) for x in v[:3]]
+        return {"_type": t, "_len": n, "_preview": preview}
+    # Numpy arrays, tensors, etc.
+    t = type(v).__name__
+    shape = getattr(v, "shape", None)
+    dtype = getattr(v, "dtype", None)
+    if shape is not None:
+        info: dict[str, Any] = {"_type": t, "_shape": list(shape)}
+        if dtype is not None:
+            info["_dtype"] = str(dtype)
+        return info
+    # Fallback
+    r = repr(v)
+    if len(r) > max_len:
+        r = r[:max_len] + "..."
+    return {"_type": t, "_repr": r}
+
+
+def _summarize_params(
+    expr: TaskExpression,
+    resolved_args: tuple[Any, ...],
+    resolved_kwargs: dict[str, Any],
+) -> str:
+    """Build a JSON string summarizing the task's parameters."""
+    import inspect
+    import json
+
+    params: dict[str, Any] = {}
+
+    # Try to match positional args to parameter names
+    try:
+        sig = inspect.signature(expr.func)
+        param_names = list(sig.parameters.keys())
+        for i, val in enumerate(resolved_args):
+            name = param_names[i] if i < len(param_names) else f"arg{i}"
+            params[name] = _summarize_value(val)
+    except (ValueError, TypeError):
+        for i, val in enumerate(resolved_args):
+            params[f"arg{i}"] = _summarize_value(val)
+
+    for k, v in resolved_kwargs.items():
+        params[k] = _summarize_value(v)
+
+    try:
+        return json.dumps(params, default=str, ensure_ascii=False)
+    except Exception:
+        return "{}"
+    from rinnsal.data.database import Database
+
+
+class ExecutionEngine:
+    """Engine for evaluating task expression DAGs.
+
+    The engine walks the DAG in topological order, resolves dependencies,
+    dispatches tasks to an executor, handles retries, and manages results.
+    Optionally caches results to a database for persistence.
+
+    When a Logger is provided, task execution events (start, success,
+    failure, stdout/stderr) are logged locally. This works with all
+    executors including SSH and subprocess, since logging happens in
+    the main process — not inside the remote task.
+    """
+
+    def __init__(
+        self,
+        executor: Executor | None = None,
+        database: Database | None = None,
+        logger: Logger | None = None,
+    ) -> None:
+        self._executor = executor or InlineExecutor()
+        self._database = database
+        self._logger = logger
+        self._evaluated: dict[str, Any] = {}
+
+    @property
+    def executor(self) -> Executor:
+        return self._executor
+
+    @property
+    def database(self) -> Database | None:
+        return self._database
+
+    @property
+    def logger(self) -> Logger | None:
+        return self._logger
+
+    def evaluate(self, *expressions: TaskExpression) -> Any | tuple[Any, ...]:
+        """Evaluate one or more task expressions.
+
+        Args:
+            *expressions: One or more TaskExpressions to evaluate
+
+        Returns:
+            Single value if one expression, tuple if multiple
+        """
+        if not expressions:
+            raise ValueError("At least one expression required")
+
+        # Build DAG from all expressions
+        dag = DAG.from_expressions(list(expressions))
+
+        # Get topological order
+        ordered = dag.topological_sort()
+
+        # Emit DAG structure (TaskEdge events) to the context logger.
+        # Each edge is emitted once per call to evaluate. Only named
+        # tasks are represented — anonymous lambdas are skipped.
+        from rinnsal.context import current as _ctx
+        ctx_logger = _ctx.logger
+        if ctx_logger is not None:
+            seen_edges: set[tuple[str, str]] = set()
+            for expr in ordered:
+                if not expr.task_name:
+                    continue
+                for dep_hash in dag.get_dependencies(expr.hash):
+                    dep_expr = dag.get_node(dep_hash)
+                    if dep_expr is None or not dep_expr.task_name:
+                        continue
+                    edge = (dep_expr.task_name, expr.task_name)
+                    if edge in seen_edges:
+                        continue
+                    seen_edges.add(edge)
+                    ctx_logger.add_task_edge(
+                        from_task=edge[0], to_task=edge[1]
+                    )
+
+        # Evaluate each task in order
+        for expr in ordered:
+            if expr.hash in self._evaluated:
+                # Hash found in engine cache - ensure expression has the result
+                if not expr.is_evaluated:
+                    expr.set_result(self._evaluated[expr.hash])
+                if ctx_logger is not None and expr.task_name:
+                    ctx_logger.add_task_node(
+                        task_name=expr.task_name,
+                        task_hash=expr.hash,
+                        status="cached",
+                    )
+                continue
+
+            if expr.is_evaluated:
+                self._evaluated[expr.hash] = expr.result
+                if ctx_logger is not None and expr.task_name:
+                    ctx_logger.add_task_node(
+                        task_name=expr.task_name,
+                        task_hash=expr.hash,
+                        status="cached",
+                    )
+                continue
+
+            # Resolve arguments
+            resolved_args, resolved_kwargs = self._resolve_args(expr)
+
+            # Compute checkpoint path (only for file-based databases)
+            checkpoint_path = None
+            if self._database is not None and hasattr(
+                self._database, "_task_results_dir"
+            ):
+                from pathlib import Path
+
+                task_dir = self._database._task_results_dir(
+                    expr.hash, task_name=expr.task_name or None
+                )
+                task_dir.mkdir(parents=True, exist_ok=True)
+                checkpoint_path = task_dir / "checkpoint.dat"
+
+            # Summarize task parameters for the viewer
+            _task_params = _summarize_params(
+                expr, resolved_args, resolved_kwargs
+            )
+
+            # Emit "running" status before execution so the viewer
+            # shows the task immediately, not only after it completes.
+            if ctx_logger is not None and expr.task_name:
+                ctx_logger.add_task_node(
+                    task_name=expr.task_name,
+                    task_hash=expr.hash,
+                    status="running",
+                    params=_task_params,
+                )
+                ctx_logger.flush()
+
+            # Execute the task
+            _task_t0 = datetime.now()
+            try:
+                result, log, card = self._execute_with_retry(
+                    expr, resolved_args, resolved_kwargs,
+                    checkpoint_path=checkpoint_path,
+                )
+            except Exception as _exc:
+                if ctx_logger is not None and expr.task_name:
+                    ctx_logger.add_task_node(
+                        task_name=expr.task_name,
+                        task_hash=expr.hash,
+                        status="failed",
+                        duration=(datetime.now() - _task_t0).total_seconds(),
+                        error=str(_exc),
+                        params=_task_params,
+                    )
+                raise
+            _task_elapsed = (datetime.now() - _task_t0).total_seconds()
+
+            if ctx_logger is not None and expr.task_name:
+                ctx_logger.add_task_node(
+                    task_name=expr.task_name,
+                    task_hash=expr.hash,
+                    status="success",
+                    duration=_task_elapsed,
+                    params=_task_params,
+                )
+
+            # Store the result
+            expr.set_result(result)
+            self._evaluated[expr.hash] = result
+
+            # Persist to database
+            if self._database is not None:
+                metadata: dict[str, Any] = {
+                    "task_name": expr.task_name,
+                    "func_name": expr.func.__name__,
+                }
+                if expr.task_def.resources:
+                    metadata["resources"] = expr.task_def.resources.as_dict()
+                if card:
+                    metadata["card"] = card
+
+                # Look up snapshot (cached, so this is a no-op if already created)
+                snapshot_obj = None
+                try:
+                    from rinnsal.versioning.snapshot import get_snapshot_manager
+                    from rinnsal.modeling.types import Snapshot
+
+                    manager = get_snapshot_manager()
+                    snap_hash, snap_path = manager.create_snapshot(expr.func)
+                    if snap_hash:
+                        snapshot_obj = Snapshot(
+                            hash=snap_hash, path=snap_path
+                        )
+                except Exception:
+                    pass
+
+                entry = Entry(
+                    result=result,
+                    log=log,
+                    metadata=metadata,
+                    timestamp=datetime.now(),
+                    snapshot=snapshot_obj,
+                )
+                self._database.store_task_result(expr.hash, entry, expr.task_name)
+
+        # Return results
+        if len(expressions) == 1:
+            return expressions[0].result
+        return tuple(expr.result for expr in expressions)
+
+    def _resolve_args(
+        self, expr: TaskExpression
+    ) -> tuple[tuple[Any, ...], dict[str, Any]]:
+        """Resolve expression arguments to their actual values."""
+        resolved_args = []
+        for arg in expr.args:
+            resolved_args.append(self._resolve_value(arg))
+
+        resolved_kwargs = {}
+        for key, value in expr.kwargs.items():
+            resolved_kwargs[key] = self._resolve_value(value)
+
+        return tuple(resolved_args), resolved_kwargs
+
+    def _resolve_value(self, value: Any) -> Any:
+        """Resolve a single value, unwrapping expressions."""
+        if isinstance(value, TaskExpression):
+            # The task should already be evaluated
+            if not value.is_evaluated:
+                raise RuntimeError(
+                    f"Dependency '{value.task_name}' not yet evaluated"
+                )
+            return value.result
+        if isinstance(value, ValueExpression):
+            return value.value
+        return value
+
+    def _execute_with_retry(
+        self,
+        expr: TaskExpression,
+        resolved_args: tuple[Any, ...],
+        resolved_kwargs: dict[str, Any],
+        checkpoint_path: Any = None,
+    ) -> tuple[Any, str, list[dict] | None]:
+        """Execute a task with retry support.
+
+        When a Logger is attached, logs task events locally. This works
+        with all executors (inline, subprocess, SSH, Slurm) since logging
+        happens in the main process after the result is returned.
+
+        Returns:
+            Tuple of (result, captured_log, card_data)
+        """
+        from concurrent.futures import TimeoutError as FuturesTimeoutError
+        from rinnsal.compute.executor import ExecutionResult
+
+        max_attempts = expr.task_def.retry + 1
+        timeout = expr.task_def.timeout
+        last_error: Exception | None = None
+        combined_log = ""
+
+        # Set up checkpoint context
+        if checkpoint_path is not None:
+            from rinnsal.context import Checkpoint, current as _current
+
+            _current._set_checkpoint(Checkpoint(path=checkpoint_path))
+            self._executor._checkpoint_path = str(checkpoint_path)
+
+        for attempt in range(max_attempts):
+            t0 = datetime.now()
+
+            if timeout is not None:
+                # Use submit + future.result(timeout) for timeout support
+                future = self._executor.submit(
+                    expr, resolved_args, resolved_kwargs
+                )
+                try:
+                    result = future.result(timeout=timeout)
+                except FuturesTimeoutError:
+                    result = ExecutionResult(
+                        value=None,
+                        success=False,
+                        error=TimeoutError(
+                            f"Task '{expr.task_name}' timed out "
+                            f"after {timeout}s"
+                        ),
+                    )
+            else:
+                result = self._executor.execute_sync(
+                    expr, resolved_args, resolved_kwargs
+                )
+
+            elapsed = (datetime.now() - t0).total_seconds()
+
+            attempt_log = result.stdout + result.stderr
+            combined_log += attempt_log
+
+            if self._logger is not None:
+                name = expr.task_name
+                if result.success:
+                    self._logger.add_scalar(
+                        f"{name}/duration", elapsed
+                    )
+                    if result.stdout:
+                        self._logger.add_text(
+                            f"{name}/stdout", result.stdout
+                        )
+                    if result.stderr:
+                        self._logger.add_text(
+                            f"{name}/stderr", result.stderr
+                        )
+                else:
+                    self._logger.add_text(
+                        f"{name}/error",
+                        str(result.error),
+                    )
+
+            # Log cards to current.logger (set by flow.run)
+            if result.success and result.card:
+                from rinnsal.context import current as _ctx
+                ctx_logger = _ctx.logger
+                if ctx_logger is not None:
+                    import base64
+                    import json
+                    for card_item in result.card:
+                        kind = card_item.get("kind", "text")
+                        title = card_item.get("title", "")
+                        content = card_item.get("content", "")
+                        image = b""
+
+                        # Handle different content types
+                        if kind == "image":
+                            # Content is base64-encoded PNG
+                            if isinstance(content, str):
+                                try:
+                                    image = base64.b64decode(content)
+                                except Exception:
+                                    pass
+                            content = ""
+                        elif kind == "table":
+                            # Content is a dict, serialize to JSON
+                            if isinstance(content, dict):
+                                content = json.dumps(content)
+                        elif not isinstance(content, str):
+                            content = str(content)
+
+                        ctx_logger.add_card(
+                            task=expr.task_name,
+                            kind=kind,
+                            title=title,
+                            content=content,
+                            image=image,
+                        )
+
+            # Replay logger events collected by LoggerProxy in the worker.
+            # This covers add_scalar, add_figure, etc. called by user
+            # code inside the task function on any remote executor.
+            if result.logger_events:
+                from rinnsal.context import current as _ctx2
+                _replay_logger = _ctx2.logger
+                if _replay_logger is not None:
+                    from rinnsal.data.logger.proxy import replay_events
+                    replay_events(_replay_logger, result.logger_events)
+
+            if result.success:
+                return result.value, combined_log, result.card
+
+            # Flush captured output immediately on failure
+            if attempt_log:
+                import sys
+
+                sys.stderr.write(attempt_log)
+                sys.stderr.flush()
+
+            last_error = result.error
+
+            if attempt < max_attempts - 1:
+                # Will retry
+                continue
+
+        # All attempts failed — check if catch is enabled
+        if expr.task_def.catch_enabled:
+            catch_val = expr.task_def.catch
+            default = None if catch_val is True else catch_val
+            return default, combined_log, None
+
+        if last_error is not None:
+            raise last_error
+        raise RuntimeError(
+            f"Task '{expr.task_name}' failed after {max_attempts} attempts"
+        )
+
+    def clear_cache(self) -> None:
+        """Clear the in-memory evaluation cache."""
+        self._evaluated.clear()
+
+    def shutdown(self, wait: bool = True) -> None:
+        """Shutdown the executor."""
+        self._executor.shutdown(wait=wait)
+
+    def __enter__(self) -> ExecutionEngine:
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.shutdown()
+
+
+# Default engine instance
+_default_engine: ExecutionEngine | None = None
+
+
+def get_engine() -> ExecutionEngine:
+    """Get or create the default execution engine.
+
+    Automatically parses CLI flags (-s, etc.) when creating
+    the default engine.
+    """
+    global _default_engine
+    if _default_engine is None:
+        _default_engine = _create_default_engine()
+    return _default_engine
+
+
+def _create_default_engine() -> ExecutionEngine:
+    """Create the default engine with CLI flag support."""
+    import argparse
+
+    from rinnsal.cli.flags import add_builtin_flags, extract_builtin_flags
+
+    parser = argparse.ArgumentParser(add_help=False)
+    add_builtin_flags(parser)
+    flags, _ = parser.parse_known_args()
+    builtin = extract_builtin_flags(flags)
+
+    # Create executor
+    from rinnsal.compute.factory import create_executor
+
+    executor = create_executor(
+        builtin["executor"], capture=not builtin["no_capture"]
+    )
+
+    # Create database
+    from rinnsal.data.file_store import FileDatabase
+
+    database = FileDatabase(root=builtin["db_path"])
+
+    return ExecutionEngine(executor=executor, database=database)
+
+
+def set_engine(engine: ExecutionEngine) -> None:
+    """Set the default execution engine."""
+    global _default_engine
+    _default_engine = engine
+
+
+@overload
+def eval(expression: TaskExpression) -> Any: ...
+
+
+@overload
+def eval(
+    expression: TaskExpression, *expressions: TaskExpression
+) -> tuple[Any, ...]: ...
+
+
+def eval(*expressions: TaskExpression) -> Any | tuple[Any, ...]:
+    """Evaluate one or more task expressions.
+
+    This is the primary entry point for executing tasks. It builds the
+    DAG from the expressions and their dependencies, then evaluates
+    them in topological order.
+
+    Args:
+        *expressions: One or more TaskExpressions to evaluate
+
+    Returns:
+        Single value if one expression, tuple of values if multiple
+
+    Examples:
+        >>> @task
+        ... def source():
+        ...     return 10
+        ...
+        >>> @task
+        ... def double(x):
+        ...     return x * 2
+        ...
+        >>> result = eval(double(source()))
+        >>> result
+        20
+
+        >>> a, b = eval(source(), double(source()))
+        >>> a, b
+        (10, 20)
+    """
+    if not expressions:
+        raise ValueError("At least one expression required")
+
+    engine = get_engine()
+    return engine.evaluate(*expressions)

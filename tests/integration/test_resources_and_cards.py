@@ -2,13 +2,13 @@
 
 import pytest
 
-from rinnsal.core.task import task
-from rinnsal.core.flow import flow
-from rinnsal.core.types import Resources, _normalize_resources
+from rinnsal.modeling.task import task
+from rinnsal.modeling.flow import flow
+from rinnsal.modeling.types import Resources, _normalize_resources
 from rinnsal.context import Card, current
-from rinnsal.persistence.database import InMemoryDatabase
-from rinnsal.execution.inline import InlineExecutor
-from rinnsal.runtime.engine import ExecutionEngine, set_engine, eval as rinnsal_eval
+from rinnsal.data.database import InMemoryDatabase
+from rinnsal.compute.inline import InlineExecutor
+from rinnsal.compute.engine import ExecutionEngine, set_engine, eval as rinnsal_eval
 
 
 @pytest.fixture

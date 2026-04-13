@@ -3,9 +3,9 @@
 import sys
 import pytest
 
-from rinnsal.core.task import task
-from rinnsal.core.flow import flow, FlowResult
-from rinnsal.runtime.engine import eval as rinnsal_eval
+from rinnsal.modeling.task import task
+from rinnsal.modeling.flow import flow, FlowResult
+from rinnsal.compute.engine import eval as rinnsal_eval
 
 
 class TestBasicExecution:

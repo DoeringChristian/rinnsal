@@ -7,7 +7,7 @@ import pickle
 from pathlib import Path
 from typing import Any
 
-from rinnsal.logger.logger import EVENTS_FILE, MARKER_FILE
+from rinnsal.data.logger.logger import EVENTS_FILE, MARKER_FILE
 
 DEFAULT_MAX_POINTS = 1000
 
@@ -97,7 +97,7 @@ class RunCache:
 
     def load(self, events_path: Path) -> None:
         """Single-pass read of events.pb, populating all caches."""
-        from rinnsal.logger.event_file import EventFileReader
+        from rinnsal.data.logger.event_file import EventFileReader
 
         stat = events_path.stat()
         self.file_mtime = stat.st_mtime
