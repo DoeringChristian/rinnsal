@@ -10,9 +10,9 @@ Tasks can access this logger via `current.logger` to log:
 - Figures (matplotlib plots)
 - Cards (rich content for the viewer)
 
-`current.logger` works with all executors (inline, subprocess, SSH, Ray, Slurm).
+`current.logger` works with all executors (inline, subprocess, SSH, Slurm).
 Events are relayed back to the orchestrator automatically — in real-time for
-SSH and Ray, or batched at task completion for subprocess and Slurm.
+SSH, or batched at task completion for subprocess and Slurm.
 
 Usage:
     python examples/17_logger_in_tasks.py

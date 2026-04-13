@@ -20,9 +20,9 @@ Usage:
 import platform
 
 from rinnsal import task, flow, Resources
-from rinnsal.execution.slurm import SlurmExecutor
-from rinnsal.runtime.engine import ExecutionEngine, set_engine
-from rinnsal.persistence.file_store import FileDatabase
+from rinnsal.compute.slurm import SlurmExecutor
+from rinnsal.compute.engine import ExecutionEngine, set_engine
+from rinnsal.data.file_store import FileDatabase
 
 
 @task

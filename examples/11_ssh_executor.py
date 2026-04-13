@@ -20,8 +20,8 @@ Usage:
 import platform
 
 from rinnsal import task, flow
-from rinnsal.execution.ssh import SSHExecutor, SSHHost
-from rinnsal.runtime.engine import ExecutionEngine, set_engine
+from rinnsal.compute.ssh import SSHExecutor, SSHHost
+from rinnsal.compute.engine import ExecutionEngine, set_engine
 
 
 @task

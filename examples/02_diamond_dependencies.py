@@ -3,8 +3,8 @@
 
 import sys
 from rinnsal import task, flow
-from rinnsal.runtime.engine import set_engine, ExecutionEngine
-from rinnsal.execution.inline import InlineExecutor
+from rinnsal.compute.engine import set_engine, ExecutionEngine
+from rinnsal.compute.inline import InlineExecutor
 
 run_count = 0
 

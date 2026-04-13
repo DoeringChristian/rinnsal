@@ -5,7 +5,7 @@ Tasks can log matplotlib figures via ``current.logger.add_figure()``.
 These appear in the Figures tab when viewing a run. Figures can be
 logged as static PNGs or as interactive (pickled) objects.
 
-Works with all executors — subprocess, SSH, Ray, Slurm.
+Works with all executors — subprocess, SSH, Slurm.
 
 Usage:
     python examples/20_figure_logging.py

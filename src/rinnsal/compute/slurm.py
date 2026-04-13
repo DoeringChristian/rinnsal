@@ -151,9 +151,7 @@ class SlurmExecutor(Executor):
                 text=True,
             )
             if result.returncode != 0:
-                raise RuntimeError(
-                    f"sbatch failed: {result.stderr.strip()}"
-                )
+                raise RuntimeError(f"sbatch failed: {result.stderr.strip()}")
             # Parse job ID from "Submitted batch job 12345"
             slurm_job_id = result.stdout.strip().split()[-1]
         except FileNotFoundError:
@@ -406,7 +404,8 @@ def _get_slurm_job_state(job_id: str) -> str:
         result = subprocess.run(
             [
                 "sacct",
-                "-j", job_id,
+                "-j",
+                job_id,
                 "--format=State",
                 "--noheader",
                 "--parsable2",

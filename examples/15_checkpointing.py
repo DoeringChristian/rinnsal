@@ -12,9 +12,9 @@ Usage:
 """
 
 from rinnsal import task, flow, current
-from rinnsal.persistence.file_store import FileDatabase
-from rinnsal.execution.inline import InlineExecutor
-from rinnsal.runtime.engine import ExecutionEngine, set_engine
+from rinnsal.data.file_store import FileDatabase
+from rinnsal.compute.inline import InlineExecutor
+from rinnsal.compute.engine import ExecutionEngine, set_engine
 
 
 @task(retry=2)

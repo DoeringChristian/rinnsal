@@ -11,7 +11,7 @@ View:
 """
 
 import numpy as np
-from rinnsal.logger import Logger
+from rinnsal.data.logger import Logger
 
 
 def make_gradient(it: int, size: int = 128) -> np.ndarray:

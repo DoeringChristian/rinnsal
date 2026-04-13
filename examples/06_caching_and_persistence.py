@@ -5,9 +5,9 @@ import tempfile
 from pathlib import Path
 
 from rinnsal import task, flow
-from rinnsal.persistence.file_store import FileDatabase
-from rinnsal.runtime.engine import ExecutionEngine, set_engine
-from rinnsal.core.registry import get_registry
+from rinnsal.data.file_store import FileDatabase
+from rinnsal.compute.engine import ExecutionEngine, set_engine
+from rinnsal.modeling.registry import get_registry
 
 run_count = 0
 

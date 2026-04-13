@@ -53,6 +53,10 @@ def monitor():
         logger.add_scalar("train/accuracy", accuracy)
         logger.add_scalar("lr", lr)
 
+        print(
+            f"[epoch {epoch}] loss={loss:.4f} val_loss={val_loss:.4f} acc={accuracy:.4f}"
+        )
+
         # Log a figure every 10 epochs
         if epoch % 10 == 0 and epoch > 0:
             fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))

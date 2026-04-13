@@ -3,8 +3,8 @@
 
 import os
 from rinnsal import task, flow
-from rinnsal.execution.subprocess import SubprocessExecutor
-from rinnsal.runtime.engine import ExecutionEngine, set_engine
+from rinnsal.compute.subprocess import SubprocessExecutor
+from rinnsal.compute.engine import ExecutionEngine, set_engine
 
 
 @task
