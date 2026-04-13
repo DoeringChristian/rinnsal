@@ -707,6 +707,35 @@ def get_frontend_dist_path() -> Path:
     return Path(__file__).parent.parent / "frontend" / "dist"
 
 
+def mount_cluster(state: Any) -> None:
+    """Attach a CoordinatorState to the global app + register the routes.
+
+    Called by ``rinnsal cluster up --host`` before uvicorn boots. Idempotent
+    enough that calling it twice with the same state is a no-op.
+    """
+    from rinnsal.cluster.coordinator import router as cluster_router
+
+    if getattr(app.state, "cluster", None) is state:
+        return
+    app.state.cluster = state
+    # Avoid double-registration on hot reload.
+    paths = {r.path for r in app.routes}
+    if "/api/cluster/health" not in paths:
+        app.include_router(cluster_router, prefix="/api/cluster")
+
+    @app.on_event("startup")
+    async def _start_cluster_gc() -> None:  # pragma: no cover - boot path
+        st = getattr(app.state, "cluster", None)
+        if st is not None:
+            st.start_gc()
+
+    @app.on_event("shutdown")
+    async def _stop_cluster_gc() -> None:  # pragma: no cover - boot path
+        st = getattr(app.state, "cluster", None)
+        if st is not None:
+            await st.shutdown()
+
+
 def create_app_with_static() -> FastAPI:
     """Create the FastAPI app with static file serving for production."""
     dist_path = get_frontend_dist_path()

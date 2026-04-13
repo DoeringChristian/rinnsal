@@ -95,5 +95,26 @@ def create_executor(name: str, capture: bool = True) -> Any:
         from rinnsal.compute.slurm import SlurmExecutor
 
         return SlurmExecutor(capture=capture)
+    elif name == "cluster" or name.startswith("cluster:"):
+        import os
+
+        raw = name[8:] if name.startswith("cluster:") else os.environ.get(
+            "RINNSAL_HOST", ""
+        )
+        if not raw:
+            raise ValueError(
+                "cluster executor requires a host URL or RINNSAL_HOST env var. "
+                "e.g. --executor cluster:http://host:8800 or "
+                "cluster:host:8800"
+            )
+        if not raw.startswith(("http://", "https://")):
+            raw = f"http://{raw}"
+        from pathlib import Path
+
+        from rinnsal.compute.cluster import ClusterExecutor
+
+        return ClusterExecutor(
+            raw, capture=capture, project_root=Path.cwd()
+        )
     else:
         raise ValueError(f"Unknown executor: {name}")

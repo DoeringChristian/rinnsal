@@ -49,6 +49,61 @@ def _add_up(sub: argparse._SubParsersAction) -> None:
     )
 
 
+def _add_cluster(sub: argparse._SubParsersAction) -> None:
+    p = sub.add_parser("cluster", help="Cluster mode (coordinator + workers)")
+    cs = p.add_subparsers(dest="cluster_cmd", required=True)
+
+    up = cs.add_parser(
+        "up",
+        help=(
+            "Start a coordinator (--host) or a worker daemon (positional URL)"
+        ),
+    )
+    up.add_argument(
+        "host_url",
+        nargs="?",
+        default=None,
+        help="Coordinator URL to register with (worker mode)",
+    )
+    up.add_argument(
+        "--host",
+        action="store_true",
+        help=(
+            "Run as the coordinator (also a local worker by default; "
+            "see --no-worker)"
+        ),
+    )
+    up.add_argument(
+        "--port",
+        type=int,
+        default=8800,
+        help="Port for the coordinator (default 8800)",
+    )
+    up.add_argument(
+        "--bind",
+        type=str,
+        default="0.0.0.0",
+        help="Bind interface for the coordinator (default 0.0.0.0)",
+    )
+    up.add_argument(
+        "--db-path",
+        type=str,
+        default=".rinnsal",
+        help="Log directory the coordinator serves (default .rinnsal)",
+    )
+    up.add_argument(
+        "--name",
+        type=str,
+        default=None,
+        help="Worker name (defaults to hostname)",
+    )
+    up.add_argument(
+        "--no-worker",
+        action="store_true",
+        help="Coordinator only — don't also register as a worker",
+    )
+
+
 def _add_db(sub: argparse._SubParsersAction) -> None:
     p = sub.add_parser("db", help="Metadata database operations")
     db_sub = p.add_subparsers(dest="db_cmd", required=True)
@@ -172,6 +227,135 @@ def _cmd_db_rebuild(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_cluster_up(args: argparse.Namespace) -> int:
+    """Coordinator (--host) or worker (positional URL)."""
+    if args.host:
+        return _run_coordinator(args)
+    if not args.host_url:
+        print(
+            "rinnsal cluster up: pass --host to start a coordinator, "
+            "or a coordinator URL to register as a worker."
+        )
+        return 2
+    return _run_worker(args)
+
+
+def _run_coordinator(args: argparse.Namespace) -> int:
+    try:
+        import uvicorn  # noqa: F401
+    except ImportError:
+        print(
+            "Cluster mode requires viewer extras: pip install rinnsal[viewer]"
+        )
+        return 1
+
+    # Start the viewer app + DB + cluster routes on the same port.
+    db_path = _resolve_db_path(args.db_path)
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        from rinnsal.data.metadata import SqliteMetadataStore
+
+        SqliteMetadataStore(db_path)
+    except Exception as e:
+        print(f"warning: metadata DB init failed: {e}", file=sys.stderr)
+
+    from rinnsal.cluster.coordinator import CoordinatorState
+    from rinnsal.viewer import _build_frontend_if_needed
+    from rinnsal.viewer.backend.main import (
+        create_app_with_static,
+        mount_cluster,
+    )
+
+    if not _build_frontend_if_needed():
+        print("warning: frontend not available; API-only mode.", file=sys.stderr)
+
+    state = CoordinatorState()
+    mount_cluster(state)
+    app = create_app_with_static()
+
+    # Self-register as a local worker (unless --no-worker).
+    local_worker = None
+    if not args.no_worker:
+        from rinnsal.cluster.worker import WorkerDaemon
+
+        local_url = f"http://127.0.0.1:{args.port}"
+        local_worker = WorkerDaemon(local_url, name=args.name or "self")
+
+        # Defer registration until the server is listening. Spawn a
+        # background thread that polls /api/cluster/health then registers.
+        def _self_register() -> None:
+            import time
+            import urllib.error
+            import urllib.request
+
+            for _ in range(50):
+                try:
+                    urllib.request.urlopen(
+                        f"{local_url}/api/cluster/health", timeout=1.0
+                    )
+                    break
+                except (urllib.error.URLError, OSError):
+                    time.sleep(0.1)
+            try:
+                local_worker.start()
+            except Exception as e:
+                print(
+                    f"warning: local worker registration failed: {e}",
+                    file=sys.stderr,
+                )
+
+        import threading
+
+        threading.Thread(target=_self_register, daemon=True).start()
+
+    print(f"[rinnsal] Cluster coordinator on http://{args.bind}:{args.port}")
+    print(f"[rinnsal]   Viewer  : http://{args.bind}:{args.port}/")
+    if not args.no_worker:
+        print(f"[rinnsal]   Workers : 1 (self)")
+    print(
+        f"[rinnsal] Other machines: rinnsal cluster up "
+        f"http://<this-host>:{args.port}"
+    )
+    print(
+        f"[rinnsal] Submit flows : python my_flow.py --executor "
+        f"cluster:http://<this-host>:{args.port}"
+    )
+
+    try:
+        import uvicorn
+
+        uvicorn.run(
+            app,
+            host=args.bind,
+            port=args.port,
+            log_level="warning",
+        )
+    finally:
+        if local_worker is not None:
+            local_worker.stop()
+    return 0
+
+
+def _run_worker(args: argparse.Namespace) -> int:
+    try:
+        import httpx  # noqa: F401
+    except ImportError:
+        print(
+            "Worker mode requires httpx: pip install rinnsal[viewer]"
+        )
+        return 1
+
+    from rinnsal.cluster.worker import WorkerDaemon
+
+    url = args.host_url
+    if not url.startswith(("http://", "https://")):
+        url = f"http://{url}"
+    daemon = WorkerDaemon(url, name=args.name)
+    print(f"[rinnsal] Worker registering with {url}…")
+    daemon.run_forever()
+    return 0
+
+
 def _cmd_db_status(args: argparse.Namespace) -> int:
     db_path = _resolve_db_path(args.db_path)
     if not db_path.exists():
@@ -206,6 +390,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd", required=True)
     _add_up(sub)
     _add_db(sub)
+    _add_cluster(sub)
 
     args = parser.parse_args(argv)
 
@@ -218,6 +403,9 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_db_rebuild(args)
         if args.db_cmd == "status":
             return _cmd_db_status(args)
+    if args.cmd == "cluster":
+        if args.cluster_cmd == "up":
+            return _cmd_cluster_up(args)
     parser.print_help()
     return 2
 
