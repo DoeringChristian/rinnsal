@@ -3,6 +3,7 @@ import { ImageMetaData, imageUrl } from "../lib/api";
 import { getRunColor } from "./RunSelector";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { CompareGroup, CompareSlot, AddToCompareButton, setDragSlot } from "./CompareView";
+import LazyImage from "./LazyImage";
 
 interface ImageViewerProps {
   data: Map<string, ImageMetaData>;

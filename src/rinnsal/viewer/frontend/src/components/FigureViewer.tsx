@@ -3,6 +3,7 @@ import { FigureMetaData, figureImageUrl } from "../lib/api";
 import { getRunColor } from "./RunSelector";
 import { CollapsibleSection } from "./CollapsibleSection";
 import { CompareGroup, CompareSlot, AddToCompareButton, setDragSlot } from "./CompareView";
+import LazyImage from "./LazyImage";
 
 interface FigureViewerProps {
   data: Map<string, FigureMetaData>;
@@ -85,7 +86,9 @@ function FigureRunCard({ run, runPath, tag, figures, color, compareGroups, onAdd
   }
 
   const currentFigure = figures[idx];
-  const imgUrl = figureImageUrl(runPath, tag, currentFigure.it) + `&_v=${figures.length}`;
+  // No cache-buster: with Cache-Control: immutable + ETag, the same URL
+  // is reused and served from the browser cache on subsequent views.
+  const imgUrl = figureImageUrl(runPath, tag, currentFigure.it);
 
   const handleSliderChange = (newIdx: number) => {
     const it = figures[newIdx]?.it;
@@ -124,7 +127,7 @@ function FigureRunCard({ run, runPath, tag, figures, color, compareGroups, onAdd
           <input type="range" min={0} max={figures.length - 1} value={idx} onChange={(e) => handleSliderChange(parseInt(e.target.value))} className="w-full" draggable={false} />
         </div>
       )}
-      <img src={imgUrl} alt={`${runName} - ${tag} @ ${currentFigure.it}`} className="max-w-full rounded" loading="lazy" />
+      <LazyImage src={imgUrl} alt={`${runName} - ${tag} @ ${currentFigure.it}`} className="max-w-full rounded" />
     </div>
   );
 }

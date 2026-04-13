@@ -504,7 +504,7 @@ def list_flows(
         latest_ts_per_node: dict[str, float] = {}
 
         for run_dir in reversed(runs):  # oldest first
-            cache = get_cache(run_dir)
+            cache = get_task_graph(run_dir)
             # Dedupe nodes within one run by task_name — prefer
             # terminal states ("success"/"failed") over "cached", which
             # only indicates the task was already computed earlier in

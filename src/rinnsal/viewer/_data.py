@@ -446,7 +446,17 @@ class TaskGraphCache:
         self.file_size: int = 0
 
     def load(self, events_path: Path) -> None:
-        from rinnsal.data.logger.event_file import EventFileReader
+        """Scan events.pb skipping any record that can't contain a
+        task_node/task_edge payload. Critical for runs with hundreds of
+        MB of figures: we seek past them instead of parsing.
+
+        Wire-format peek: task_node = field 9 (tag byte 0x4A, length-
+        delimited), task_edge = field 10 (tag byte 0x52). If neither
+        byte appears in the first ~32 bytes of a record we skip.
+        """
+        import struct
+
+        from rinnsal.data.logger.events_pb2 import Event
 
         stat = events_path.stat()
         self.file_mtime = stat.st_mtime
@@ -454,25 +464,51 @@ class TaskGraphCache:
         self.task_nodes.clear()
         self.task_edges.clear()
 
-        for event in EventFileReader(events_path):
-            dt = event.WhichOneof("data")
-            if dt == "task_node":
-                tn = event.task_node
-                self.task_nodes.append(
-                    (
-                        tn.task_name,
-                        tn.task_hash,
-                        tn.status,
-                        tn.duration,
-                        tn.error,
-                        event.timestamp,
-                        getattr(tn, "params", ""),
+        TASK_NODE_TAG = 0x4A  # (field_number=9 << 3) | wire_type=2
+        TASK_EDGE_TAG = 0x52  # (field_number=10 << 3) | wire_type=2
+        PEEK_WINDOW = 64      # bytes at the start of each record to inspect
+
+        with open(events_path, "rb") as f:
+            while True:
+                length_bytes = f.read(4)
+                if len(length_bytes) < 4:
+                    break
+                length = struct.unpack("<I", length_bytes)[0]
+
+                peek = f.read(min(PEEK_WINDOW, length))
+                if TASK_NODE_TAG not in peek and TASK_EDGE_TAG not in peek:
+                    # No chance this record is a task_node/task_edge;
+                    # skip the remaining bytes without parsing.
+                    remaining = length - len(peek)
+                    if remaining > 0:
+                        f.seek(remaining, 1)
+                    continue
+
+                # Candidate — read the rest and parse.
+                if len(peek) < length:
+                    peek += f.read(length - len(peek))
+                if len(peek) < length:
+                    break
+
+                event = Event()
+                event.ParseFromString(peek)
+                dt = event.WhichOneof("data")
+                if dt == "task_node":
+                    tn = event.task_node
+                    self.task_nodes.append(
+                        (
+                            tn.task_name,
+                            tn.task_hash,
+                            tn.status,
+                            tn.duration,
+                            tn.error,
+                            event.timestamp,
+                            getattr(tn, "params", ""),
+                        )
                     )
-                )
-            elif dt == "task_edge":
-                te = event.task_edge
-                self.task_edges.append((te.from_task, te.to_task))
-            # Every other event type is skipped — crucial for speed.
+                elif dt == "task_edge":
+                    te = event.task_edge
+                    self.task_edges.append((te.from_task, te.to_task))
 
     def is_stale(self, events_path: Path) -> bool:
         try:
