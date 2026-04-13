@@ -63,21 +63,37 @@ interface FigureRunCardProps {
 }
 
 function FigureRunCard({ run, runPath, tag, figures, color, compareGroups, onAddToCompare }: FigureRunCardProps) {
-  const [selectedIdx, setSelectedIdx] = useState(figures.length - 1);
+  // Store selected iteration (not index) so position survives data refreshes.
+  // null = "follow latest"
+  const storageKey = `rinnsal-fig-it:${runPath}:${tag}`;
+  const [selectedIt, setSelectedIt] = useState<number | null>(() => {
+    try {
+      const raw = sessionStorage.getItem(storageKey);
+      return raw !== null ? Number(raw) : null;
+    } catch { return null; }
+  });
   const [sliderActive, setSliderActive] = useState(false);
   const runName = run.split("/").pop() || run;
 
-  // Track latest figure when new ones arrive
-  const safeIdx = Math.min(selectedIdx, figures.length - 1);
-  const isAtLatest = selectedIdx >= figures.length - 1;
-  if (isAtLatest && safeIdx !== figures.length - 1) {
-    // Auto-advance to newest if user was at the end
-    setSelectedIdx(figures.length - 1);
+  // Resolve index from selected iteration
+  let idx: number;
+  if (selectedIt === null) {
+    idx = figures.length - 1; // follow latest
+  } else {
+    const found = figures.findIndex((f) => f.it === selectedIt);
+    idx = found >= 0 ? found : figures.length - 1;
   }
 
-  const currentFigure = figures[isAtLatest ? figures.length - 1 : safeIdx];
-  // Cache-bust with figure count so new data is shown on refresh
+  const currentFigure = figures[idx];
   const imgUrl = figureImageUrl(runPath, tag, currentFigure.it) + `&_v=${figures.length}`;
+
+  const handleSliderChange = (newIdx: number) => {
+    const it = figures[newIdx]?.it;
+    const isLatest = newIdx >= figures.length - 1;
+    const val = isLatest ? null : it;
+    setSelectedIt(val);
+    try { sessionStorage.setItem(storageKey, val === null ? "" : String(val)); } catch {}
+  };
 
   const slot: CompareSlot = {
     type: "figure", run, tag, iterations: figures.map((f) => f.it),
@@ -105,7 +121,7 @@ function FigureRunCard({ run, runPath, tag, figures, color, compareGroups, onAdd
       </div>
       {figures.length > 1 && (
         <div className="mb-3" onMouseEnter={() => setSliderActive(true)} onMouseLeave={() => setSliderActive(false)}>
-          <input type="range" min={0} max={figures.length - 1} value={selectedIdx} onChange={(e) => setSelectedIdx(parseInt(e.target.value))} className="w-full" draggable={false} />
+          <input type="range" min={0} max={figures.length - 1} value={idx} onChange={(e) => handleSliderChange(parseInt(e.target.value))} className="w-full" draggable={false} />
         </div>
       )}
       <img src={imgUrl} alt={`${runName} - ${tag} @ ${currentFigure.it}`} className="max-w-full rounded" loading="lazy" />

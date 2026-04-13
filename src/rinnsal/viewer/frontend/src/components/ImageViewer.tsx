@@ -63,20 +63,36 @@ interface ImageRunCardProps {
 }
 
 function ImageRunCard({ run, runPath, tag, images, color, compareGroups, onAddToCompare }: ImageRunCardProps) {
-  const [selectedIdx, setSelectedIdx] = useState(images.length - 1);
+  // Store selected iteration (not index) so position survives data refreshes.
+  // null = "follow latest"
+  const storageKey = `rinnsal-img-it:${runPath}:${tag}`;
+  const [selectedIt, setSelectedIt] = useState<number | null>(() => {
+    try {
+      const raw = sessionStorage.getItem(storageKey);
+      return raw !== null && raw !== "" ? Number(raw) : null;
+    } catch { return null; }
+  });
   const [sliderActive, setSliderActive] = useState(false);
   const runName = run.split("/").pop() || run;
 
-  // Track latest image when new ones arrive
-  const safeIdx = Math.min(selectedIdx, images.length - 1);
-  const isAtLatest = selectedIdx >= images.length - 1;
-  if (isAtLatest && safeIdx !== images.length - 1) {
-    setSelectedIdx(images.length - 1);
+  let idx: number;
+  if (selectedIt === null) {
+    idx = images.length - 1;
+  } else {
+    const found = images.findIndex((img) => img.it === selectedIt);
+    idx = found >= 0 ? found : images.length - 1;
   }
 
-  const currentImg = images[isAtLatest ? images.length - 1 : safeIdx];
-  // Cache-bust with image count so new data is shown on refresh
+  const currentImg = images[idx];
   const imgSrc = imageUrl(runPath, tag, currentImg.it) + `&_v=${images.length}`;
+
+  const handleSliderChange = (newIdx: number) => {
+    const it = images[newIdx]?.it;
+    const isLatest = newIdx >= images.length - 1;
+    const val = isLatest ? null : it;
+    setSelectedIt(val);
+    try { sessionStorage.setItem(storageKey, val === null ? "" : String(val)); } catch {}
+  };
 
   const slot: CompareSlot = {
     type: "image", run, tag, iterations: images.map((i) => i.it),
@@ -104,7 +120,7 @@ function ImageRunCard({ run, runPath, tag, images, color, compareGroups, onAddTo
       </div>
       {images.length > 1 && (
         <div className="mb-3" onMouseEnter={() => setSliderActive(true)} onMouseLeave={() => setSliderActive(false)}>
-          <input type="range" min={0} max={images.length - 1} value={selectedIdx} onChange={(e) => setSelectedIdx(parseInt(e.target.value))} className="w-full" draggable={false} />
+          <input type="range" min={0} max={images.length - 1} value={idx} onChange={(e) => handleSliderChange(parseInt(e.target.value))} className="w-full" draggable={false} />
         </div>
       )}
       <img src={imgSrc} alt={`${runName} - ${tag} @ ${currentImg.it}`} className="max-w-full rounded" loading="lazy" />

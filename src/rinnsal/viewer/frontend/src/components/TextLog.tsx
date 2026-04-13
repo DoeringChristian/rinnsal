@@ -51,19 +51,21 @@ interface TextRunCardProps {
 }
 
 function TextRunCard({ run, texts, color }: TextRunCardProps) {
-  const [selectedIdx, setSelectedIdx] = useState(texts.length - 1);
+  // null = follow latest
+  const [selectedIt, setSelectedIt] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
 
   const runName = run.split("/").pop() || run;
 
-  // Auto-advance to latest when new entries arrive
-  const safeIdx = Math.min(selectedIdx, texts.length - 1);
-  const isAtLatest = selectedIdx >= texts.length - 1;
-  if (isAtLatest && safeIdx !== texts.length - 1) {
-    setSelectedIdx(texts.length - 1);
+  let idx: number;
+  if (selectedIt === null) {
+    idx = texts.length - 1;
+  } else {
+    const found = texts.findIndex((t) => t.it === selectedIt);
+    idx = found >= 0 ? found : texts.length - 1;
   }
 
-  const currentText = texts[isAtLatest ? texts.length - 1 : safeIdx];
+  const currentText = texts[idx];
 
   const handleCopy = async () => {
     try {
@@ -92,7 +94,11 @@ function TextRunCard({ run, texts, color }: TextRunCardProps) {
           <label className="block text-sm text-gray-600 mb-1">
             Iteration: {currentText.it}
           </label>
-          <input type="range" min={0} max={texts.length - 1} value={selectedIdx} onChange={(e) => setSelectedIdx(parseInt(e.target.value))} className="w-full" />
+          <input type="range" min={0} max={texts.length - 1} value={idx} onChange={(e) => {
+            const newIdx = parseInt(e.target.value);
+            const isLatest = newIdx >= texts.length - 1;
+            setSelectedIt(isLatest ? null : texts[newIdx]?.it ?? null);
+          }} className="w-full" />
         </div>
       )}
 
