@@ -316,22 +316,11 @@ class WorkerDaemon:
         import io
         from contextlib import redirect_stderr, redirect_stdout
 
-        import cloudpickle
-
-        from rinnsal.context import current
-        from rinnsal.data.logger.proxy import LoggerProxy
-
         try:
             func, args, kwargs = self._fetch_payload(job)
         except Exception as e:
-            self._post_failure(job.job_id, e, "", "", b"")
+            self._post_failure(job.job_id, e, "", "")
             return
-
-        # Install a LoggerProxy so user code that calls
-        # ``current.logger.add_*`` collects events in-process; we ship
-        # the buffer back to the orchestrator with the result.
-        proxy = LoggerProxy()
-        current._set_logger(proxy)
 
         stdout_buf = io.StringIO()
         stderr_buf = io.StringIO()
@@ -345,19 +334,15 @@ class WorkerDaemon:
             else:
                 value = func(*args, **kwargs)
         except Exception as e:
-            current._reset_logger()
             self._post_failure(
                 job.job_id, e,
                 stdout_buf.getvalue(), stderr_buf.getvalue(),
-                proxy.get_buffer(),
             )
             return
 
-        current._reset_logger()
         self._post_success(
             job.job_id, value,
             stdout_buf.getvalue(), stderr_buf.getvalue(),
-            proxy.get_buffer(),
         )
 
     # ── subprocess path (provisioned project) ───────────────────────
@@ -465,7 +450,6 @@ class WorkerDaemon:
         value: Any,
         stdout: str,
         stderr: str,
-        logger_events: bytes = b"",
     ) -> None:
         try:
             import cloudpickle
@@ -476,7 +460,6 @@ class WorkerDaemon:
             self._put_bytes(
                 f"/api/cluster/blobs/{result_hash}", result_bytes
             )
-            events_hash = self._upload_events(logger_events)
             self._request(
                 "POST",
                 f"/api/cluster/jobs/{job_id}/result",
@@ -485,12 +468,11 @@ class WorkerDaemon:
                     "result_blob_hash": result_hash,
                     "stdout": stdout,
                     "stderr": stderr,
-                    "logger_events_blob_hash": events_hash,
                 },
             )
         except Exception as e:
             log.exception("failed to post result for job %s", job_id)
-            self._post_failure(job_id, e, stdout, stderr, logger_events)
+            self._post_failure(job_id, e, stdout, stderr)
 
     def _post_failure(
         self,
@@ -498,7 +480,6 @@ class WorkerDaemon:
         error: Exception,
         stdout: str,
         stderr: str,
-        logger_events: bytes = b"",
     ) -> None:
         try:
             import cloudpickle
@@ -509,7 +490,6 @@ class WorkerDaemon:
             self._put_bytes(
                 f"/api/cluster/blobs/{error_hash}", error_bytes
             )
-            events_hash = self._upload_events(logger_events)
             self._request(
                 "POST",
                 f"/api/cluster/jobs/{job_id}/result",
@@ -518,24 +498,10 @@ class WorkerDaemon:
                     "error_blob_hash": error_hash,
                     "stdout": stdout,
                     "stderr": stderr,
-                    "logger_events_blob_hash": events_hash,
                 },
             )
         except Exception:
             log.exception("failed to post failure for job %s", job_id)
-
-    def _upload_events(self, events: bytes) -> str:
-        if not events:
-            return ""
-        import hashlib
-
-        h = hashlib.sha256(events).hexdigest()
-        try:
-            self._put_bytes(f"/api/cluster/blobs/{h}", events)
-        except Exception:
-            log.warning("logger events upload failed", exc_info=True)
-            return ""
-        return h
 
     # ── project provisioning ────────────────────────────────────────
 

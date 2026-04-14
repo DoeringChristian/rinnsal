@@ -113,11 +113,6 @@ class JobResultRequest(BaseModel):
     error_blob_hash: str = ""
     stdout: str = ""
     stderr: str = ""
-    # Length-prefixed protobuf events collected by LoggerProxy on the
-    # worker side. Coordinator stores the blob hash; the submitter
-    # replays it into its real Logger via replay_events. Empty when
-    # the task didn't log anything.
-    logger_events_blob_hash: str = ""
 
 
 class JobStatus(BaseModel):
@@ -130,5 +125,4 @@ class JobStatus(BaseModel):
     stderr: str = ""
     submitted_at: float = 0.0
     finished_at: float | None = None
-    logger_events_blob_hash: str = ""
 

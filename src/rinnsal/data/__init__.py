@@ -1,1 +1,1 @@
-"""Data layer: persistence (Database, FileDatabase, serializers) and logger artifacts."""
+"""Data layer: task-result cache (Database, FileDatabase, locking)."""

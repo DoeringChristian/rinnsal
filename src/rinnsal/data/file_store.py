@@ -13,7 +13,26 @@ from typing import Any
 from rinnsal.modeling.types import Entry, Snapshot
 from rinnsal.data.database import BaseDatabase
 from rinnsal.data.locking import file_lock
-from rinnsal.data.serializers import HybridSerializer, Serializer
+
+
+class _CloudpickleSerializer:
+    """Minimal cloudpickle-backed serializer for task result entries.
+
+    Task results can be arbitrary Python objects (closures, ML
+    frameworks' tensors, user dataclasses), so JSON-first serialization
+    is a false economy.
+    """
+
+    def save(self, value: Any, path: Path) -> None:
+        import cloudpickle
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(cloudpickle.dumps(value))
+
+    def load(self, path: Path) -> Any:
+        import cloudpickle
+
+        return cloudpickle.loads(path.read_bytes())
 
 
 class FileDatabase(BaseDatabase):
@@ -41,10 +60,10 @@ class FileDatabase(BaseDatabase):
     def __init__(
         self,
         root: Path | str = ".rinnsal",
-        serializer: Serializer | None = None,
+        serializer: Any = None,
     ) -> None:
         self._root = Path(root)
-        self._serializer = serializer or HybridSerializer()
+        self._serializer = serializer or _CloudpickleSerializer()
 
         # Create directory structure
         self._tasks_dir = self._root / "tasks"
@@ -63,16 +82,6 @@ class FileDatabase(BaseDatabase):
     @property
     def root(self) -> Path:
         return self._root
-
-    def metadata_store(self):
-        """Return the canonical SqliteMetadataStore for this DB root.
-
-        Stored at ``<root>/metadata.sqlite``; engines are process-cached
-        so repeated calls return the same instance.
-        """
-        from rinnsal.data.metadata import default_store_for
-
-        return default_store_for(self)
 
     def _task_dir(self, task_hash: str, task_name: str | None = None) -> Path:
         """Resolve the on-disk directory for a task.

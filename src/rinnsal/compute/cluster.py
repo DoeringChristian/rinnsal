@@ -222,26 +222,6 @@ class ClusterExecutor(Executor):
             if status["status"] in {"success", "failed", "revoked"}:
                 break
 
-        # Replay logger events the worker collected, if any.
-        events_bytes = b""
-        events_hash = status.get("logger_events_blob_hash") or ""
-        if events_hash:
-            try:
-                events_bytes = self._request_bytes(
-                    "GET", f"/api/cluster/blobs/{events_hash}"
-                )
-            except Exception:
-                log.warning("logger events fetch failed", exc_info=True)
-            if events_bytes and self._logger is not None:
-                try:
-                    from rinnsal.data.logger.proxy import replay_events
-
-                    replay_events(self._logger, events_bytes)
-                except Exception:
-                    log.warning(
-                        "logger events replay failed", exc_info=True
-                    )
-
         if status["status"] == "success":
             try:
                 result_bytes = self._request_bytes(
@@ -253,14 +233,12 @@ class ClusterExecutor(Executor):
                     value=None, success=False, error=e,
                     stdout=status.get("stdout", ""),
                     stderr=status.get("stderr", ""),
-                    logger_events=events_bytes,
                 )
             return ExecutionResult(
                 value=value,
                 success=True,
                 stdout=status.get("stdout", ""),
                 stderr=status.get("stderr", ""),
-                logger_events=events_bytes,
             )
 
         # failed / revoked: try to materialize the error from the blob.
@@ -282,5 +260,4 @@ class ClusterExecutor(Executor):
             error=err,
             stdout=status.get("stdout", ""),
             stderr=status.get("stderr", ""),
-            logger_events=events_bytes,
         )

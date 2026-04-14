@@ -46,18 +46,11 @@ class LocalOrchestrator:
                         plan.progress.complete(expr.task_name, cached=False)
                         outcome.n_passed += 1
                         outcome.completed.add(expr.hash)
-                        plan.logger.add_text(
-                            f"task/{expr.task_name}/status", "completed"
-                        )
                     except Exception as e:
                         outcome.failed_hashes.add(expr.hash)
                         outcome.errors.append((expr.task_name, e))
                         plan.progress.fail(expr.task_name)
                         outcome.n_failed += 1
-                        plan.logger.add_text(
-                            f"task/{expr.task_name}/status",
-                            f"failed: {e}",
-                        )
                     finally:
                         current._set_task_name("")
                 elif expr.is_evaluated:

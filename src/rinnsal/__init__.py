@@ -1,4 +1,9 @@
-"""Rinnsal: A declarative DAG execution framework for Python."""
+"""Rinnsal: A declarative DAG execution framework for Python.
+
+The logger/viewer surface was removed in favor of first-class aim
+integration. See :mod:`rinnsal.aim` (``from rinnsal.aim import
+AimLogger``) for the supported tracking API.
+"""
 
 from rinnsal.modeling.task import task
 from rinnsal.modeling.flow import flow, FlowResult, set_progress
@@ -6,7 +11,6 @@ from rinnsal.modeling.types import Config, Entry, Resources, TaskRuns, to_dict
 from rinnsal.modeling.registry_build import register, build
 from rinnsal.versioning.snapshot import use_snapshot
 from rinnsal.compute.engine import eval
-from rinnsal.data.logger import Logger, LogReader
 from rinnsal.context import current
 
 __all__ = [
@@ -22,8 +26,6 @@ __all__ = [
     "register",
     "build",
     "set_progress",
-    "Logger",
-    "LogReader",
     "current",
     "use_snapshot",
 ]

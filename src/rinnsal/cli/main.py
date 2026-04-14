@@ -1,52 +1,25 @@
 """Unified ``rinnsal`` CLI dispatcher.
 
 Subcommands:
-  rinnsal up [LOG_DIR]      Start the viewer + auto-init/upgrade the DB.
-  rinnsal db upgrade        Apply pending DB migrations.
-  rinnsal db rebuild        Drop the DB file and re-init.
-  rinnsal db status         Show schema rev + row counts.
+  rinnsal cluster up --host [--aim]    Start a coordinator (+ optional aim server)
+  rinnsal cluster up <URL>             Register as a worker with a coordinator
 
-``rinnsal-viewer`` script remains as a back-compat alias of ``rinnsal up``.
+The viewer and metadata-DB subcommands were removed when rinnsal
+switched to aim for logging — ``aim up`` is the UI. ``rinnsal cluster
+up --host --aim`` will also spawn an ``aim server`` subprocess next to
+the coordinator so remote workers have a network-reachable aim repo.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
-from pathlib import Path
 
 
-def _add_up(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser(
-        "up",
-        help="Start the viewer + auto-init the metadata DB",
-    )
-    p.add_argument(
-        "log_dir",
-        nargs="?",
-        default=".rinnsal",
-        help="Log directory to view (default: .rinnsal)",
-    )
-    p.add_argument(
-        "--port",
-        type=int,
-        default=8765,
-        help="Port to bind (default 8765; increments if busy)",
-    )
-    p.add_argument(
-        "--host",
-        type=str,
-        default="127.0.0.1",
-        help=(
-            "Interface to bind. Default 127.0.0.1 (loopback only). "
-            "Use 0.0.0.0 to expose for LAN/Tailscale."
-        ),
-    )
-    p.add_argument(
-        "--debug",
-        action="store_true",
-        help="Verbose request + I/O timing logs",
-    )
+# Default port for the embedded aim tracking server when ``--aim`` is
+# passed. Fixed rather than derived from the coordinator port so users
+# can hard-code it in scripts. Override with ``--aim-port``.
+DEFAULT_AIM_PORT = 43800
 
 
 def _add_cluster(sub: argparse._SubParsersAction) -> None:
@@ -86,12 +59,6 @@ def _add_cluster(sub: argparse._SubParsersAction) -> None:
         help="Bind interface for the coordinator (default 0.0.0.0)",
     )
     up.add_argument(
-        "--db-path",
-        type=str,
-        default=".rinnsal",
-        help="Log directory the coordinator serves (default .rinnsal)",
-    )
-    up.add_argument(
         "--name",
         type=str,
         default=None,
@@ -102,129 +69,27 @@ def _add_cluster(sub: argparse._SubParsersAction) -> None:
         action="store_true",
         help="Coordinator only — don't also register as a worker",
     )
-
-
-def _add_db(sub: argparse._SubParsersAction) -> None:
-    p = sub.add_parser("db", help="Metadata database operations")
-    db_sub = p.add_subparsers(dest="db_cmd", required=True)
-
-    up = db_sub.add_parser(
-        "upgrade",
-        help="Apply pending Alembic migrations",
+    up.add_argument(
+        "--aim",
+        action="store_true",
+        help=(
+            "Also spawn an aim tracking server alongside the coordinator. "
+            "Workers using ``rinnsal.aim.AimLogger`` will auto-discover it "
+            "via GET /api/cluster/aim."
+        ),
     )
     up.add_argument(
-        "--db-path",
+        "--aim-port",
+        type=int,
+        default=DEFAULT_AIM_PORT,
+        help=f"Port for the aim tracking server (default {DEFAULT_AIM_PORT})",
+    )
+    up.add_argument(
+        "--aim-repo",
         type=str,
-        default=".rinnsal",
-        help=(
-            "Path to the rinnsal directory (containing metadata.sqlite); "
-            "default .rinnsal"
-        ),
+        default=".aim",
+        help="aim repo path (default ./.aim)",
     )
-
-    rb = db_sub.add_parser(
-        "rebuild",
-        help=(
-            "Drop the metadata DB and re-create it. "
-            "Backfill from events.pb arrives in DB Phase 4."
-        ),
-    )
-    rb.add_argument("--db-path", type=str, default=".rinnsal")
-    rb.add_argument(
-        "--yes",
-        action="store_true",
-        help="Skip confirmation prompt",
-    )
-
-    st = db_sub.add_parser(
-        "status",
-        help="Show schema revision + row counts",
-    )
-    st.add_argument("--db-path", type=str, default=".rinnsal")
-
-
-def _resolve_db_path(arg: str) -> Path:
-    p = Path(arg).expanduser().resolve()
-    if p.suffix == ".sqlite":
-        return p
-    return p / "metadata.sqlite"
-
-
-def _cmd_up(args: argparse.Namespace) -> int:
-    """rinnsal up — viewer + auto-init DB."""
-    from rinnsal.viewer import run as viewer_run
-
-    # Eagerly initialize/upgrade the DB so first request to /api/flows is
-    # snappy (no migration delay during the user's first interaction).
-    db_path = _resolve_db_path(args.log_dir)
-    if db_path.parent.exists():
-        try:
-            from rinnsal.data.metadata import SqliteMetadataStore
-
-            SqliteMetadataStore(db_path)  # auto-applies migrations
-        except Exception as e:
-            print(
-                f"warning: could not initialize metadata DB at {db_path}: {e}",
-                file=sys.stderr,
-            )
-
-    viewer_run(
-        log_path=args.log_dir,
-        port=args.port,
-        host=args.host,
-        debug=args.debug,
-    )
-    return 0
-
-
-def _cmd_db_upgrade(args: argparse.Namespace) -> int:
-    db_path = _resolve_db_path(args.db_path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    from rinnsal.data.metadata import SqliteMetadataStore
-
-    print(f"applying migrations to {db_path}…")
-    SqliteMetadataStore(db_path)  # __init__ runs migrations
-    print("done.")
-    return 0
-
-
-def _cmd_db_rebuild(args: argparse.Namespace) -> int:
-    db_path = _resolve_db_path(args.db_path)
-    if db_path.exists():
-        if not args.yes:
-            confirm = input(
-                f"This will delete {db_path}. Continue? [y/N] "
-            ).strip().lower()
-            if confirm not in ("y", "yes"):
-                print("aborted.")
-                return 1
-        # Reset the engine cache so re-creating against the same path
-        # opens a fresh DB instead of reusing the cached engine.
-        from rinnsal.data.metadata.sqlite import _engines
-
-        _engines.pop(db_path.resolve(), None)
-        db_path.unlink()
-        for sib in (db_path.with_suffix(".sqlite-wal"),
-                    db_path.with_suffix(".sqlite-shm")):
-            if sib.exists():
-                sib.unlink()
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    from rinnsal.data.metadata import SqliteMetadataStore
-    from rinnsal.data.metadata.backfill import Backfiller
-
-    store = SqliteMetadataStore(db_path)
-    print(f"recreated {db_path}")
-
-    # Backfill from events.pb under the DB root.
-    bf = Backfiller(store, db_path.parent)
-    pending = bf.discover_pending()
-    if not pending:
-        print("no existing run dirs to index.")
-        return 0
-    print(f"indexing {len(pending)} run(s)…")
-    n = bf.run_sync()
-    print(f"indexed {n} run(s).")
-    return 0
 
 
 def _cmd_cluster_up(args: argparse.Namespace) -> int:
@@ -240,38 +105,87 @@ def _cmd_cluster_up(args: argparse.Namespace) -> int:
     return _run_worker(args)
 
 
+def _spawn_aim_server(repo: str, host: str, port: int) -> object | None:
+    """Start ``aim server --repo <repo> --host <host> --port <port>``.
+
+    Returns the Popen handle so the caller can terminate it on shutdown.
+    None when aim isn't available or the server fails to start.
+    """
+    import shutil
+    import subprocess
+    from pathlib import Path
+
+    if shutil.which("aim") is None:
+        print(
+            "warning: --aim requested but `aim` binary not on PATH. "
+            "Install with: pip install 'aim>=3.25,<4'",
+            file=sys.stderr,
+        )
+        return None
+
+    repo_path = Path(repo).expanduser().resolve()
+    repo_path.mkdir(parents=True, exist_ok=True)
+    # `aim init` is idempotent and only writes if the repo is empty.
+    try:
+        subprocess.run(
+            ["aim", "init", "--repo", str(repo_path)],
+            capture_output=True, check=False, timeout=30,
+        )
+    except Exception as e:
+        print(f"warning: aim init failed: {e}", file=sys.stderr)
+        return None
+
+    try:
+        proc = subprocess.Popen(
+            [
+                "aim", "server",
+                "--repo", str(repo_path),
+                "--host", host,
+                "--port", str(port),
+            ],
+        )
+    except Exception as e:
+        print(f"warning: failed to spawn aim server: {e}", file=sys.stderr)
+        return None
+    return proc
+
+
 def _run_coordinator(args: argparse.Namespace) -> int:
     try:
         import uvicorn  # noqa: F401
+        from fastapi import FastAPI  # noqa: F401
     except ImportError:
         print(
-            "Cluster mode requires viewer extras: pip install rinnsal[viewer]"
+            "Cluster mode requires fastapi + uvicorn. "
+            "Install with: pip install 'rinnsal[cluster]'"
         )
         return 1
 
-    # Start the viewer app + DB + cluster routes on the same port.
-    db_path = _resolve_db_path(args.db_path)
-    db_path.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        from rinnsal.data.metadata import SqliteMetadataStore
+    from fastapi import FastAPI
 
-        SqliteMetadataStore(db_path)
-    except Exception as e:
-        print(f"warning: metadata DB init failed: {e}", file=sys.stderr)
-
-    from rinnsal.cluster.coordinator import CoordinatorState
-    from rinnsal.viewer import _build_frontend_if_needed
-    from rinnsal.viewer.backend.main import (
-        create_app_with_static,
-        mount_cluster,
+    from rinnsal.cluster.coordinator import (
+        CoordinatorState,
+        router as cluster_router,
     )
 
-    if not _build_frontend_if_needed():
-        print("warning: frontend not available; API-only mode.", file=sys.stderr)
-
     state = CoordinatorState()
-    mount_cluster(state)
-    app = create_app_with_static()
+    app = FastAPI(title="rinnsal coordinator")
+    app.state.cluster = state
+    app.include_router(cluster_router, prefix="/api/cluster")
+
+    # Optional aim tracking server.
+    aim_proc = None
+    aim_repo_url: str | None = None
+    if args.aim:
+        aim_proc = _spawn_aim_server(args.aim_repo, args.bind, args.aim_port)
+        if aim_proc is not None:
+            # Advertise a reachable URL — bind "0.0.0.0" in the URL is
+            # never useful to clients, replace with the coordinator
+            # host so the workers know where to connect.
+            host_for_url = args.bind if args.bind not in ("0.0.0.0", "::") \
+                else "0.0.0.0"
+            aim_repo_url = f"aim://{host_for_url}:{args.aim_port}"
+            state.aim_repo_url = aim_repo_url
 
     # Self-register as a local worker (unless --no-worker).
     local_worker = None
@@ -281,8 +195,6 @@ def _run_coordinator(args: argparse.Namespace) -> int:
         local_url = f"http://127.0.0.1:{args.port}"
         local_worker = WorkerDaemon(local_url, name=args.name or "self")
 
-        # Defer registration until the server is listening. Spawn a
-        # background thread that polls /api/cluster/health then registers.
         def _self_register() -> None:
             import time
             import urllib.error
@@ -298,9 +210,10 @@ def _run_coordinator(args: argparse.Namespace) -> int:
                     time.sleep(0.1)
             try:
                 local_worker.start()
-                # start() only spawns heartbeats — the self-worker also
-                # needs the long-poll job loop, or the coordinator will
-                # queue jobs indefinitely with no one to pick them up.
+                # ``start()`` only spawns the heartbeat thread. The
+                # self-worker also needs the long-poll job loop, or the
+                # coordinator will queue jobs indefinitely with no one to
+                # pick them up.
                 local_worker.start_job_loop()
             except Exception as e:
                 print(
@@ -313,9 +226,13 @@ def _run_coordinator(args: argparse.Namespace) -> int:
         threading.Thread(target=_self_register, daemon=True).start()
 
     print(f"[rinnsal] Cluster coordinator on http://{args.bind}:{args.port}")
-    print(f"[rinnsal]   Viewer  : http://{args.bind}:{args.port}/")
+    if aim_repo_url is not None:
+        print(f"[rinnsal]   Aim tracking : {aim_repo_url}")
+        print(
+            f"[rinnsal]   Aim UI       : run `aim up --repo {args.aim_repo}`"
+        )
     if not args.no_worker:
-        print(f"[rinnsal]   Workers : 1 (self)")
+        print(f"[rinnsal]   Workers      : 1 (self)")
     print(
         f"[rinnsal] Other machines: rinnsal cluster up "
         f"http://<this-host>:{args.port}"
@@ -337,6 +254,12 @@ def _run_coordinator(args: argparse.Namespace) -> int:
     finally:
         if local_worker is not None:
             local_worker.stop()
+        if aim_proc is not None:
+            try:
+                aim_proc.terminate()
+                aim_proc.wait(timeout=5)
+            except Exception:
+                pass
     return 0
 
 
@@ -345,7 +268,8 @@ def _run_worker(args: argparse.Namespace) -> int:
         import httpx  # noqa: F401
     except ImportError:
         print(
-            "Worker mode requires httpx: pip install rinnsal[viewer]"
+            "Worker mode requires httpx. "
+            "Install with: pip install 'rinnsal[cluster]'"
         )
         return 1
 
@@ -360,53 +284,19 @@ def _run_worker(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_db_status(args: argparse.Namespace) -> int:
-    db_path = _resolve_db_path(args.db_path)
-    if not db_path.exists():
-        print(f"no DB at {db_path} (run `rinnsal db upgrade` to create it)")
-        return 1
-    from sqlalchemy import func, select
-
-    from rinnsal.data.metadata import SqliteMetadataStore
-    from rinnsal.data.metadata.models import Flow, Run, TaskEdge, TaskNode
-
-    store = SqliteMetadataStore(db_path)
-    print(f"db: {db_path}")
-    with store._engine.begin() as conn:  # noqa: SLF001 — admin tool
-        for tbl in (Flow, Run, TaskNode, TaskEdge):
-            n = conn.execute(
-                select(func.count()).select_from(tbl)
-            ).scalar_one()
-            print(f"  {tbl.__tablename__:14s} {n}")
-    # Schema revision via Alembic.
-    from rinnsal.data.metadata.sqlite import _current_revision
-
-    rev = _current_revision(store._engine)  # noqa: SLF001
-    print(f"  schema_rev    {rev}")
-    return 0
-
-
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="rinnsal",
-        description="Rinnsal: declarative DAG execution + viewer.",
+        description=(
+            "rinnsal — declarative DAG execution. "
+            "Use `aim up` for the UI; `rinnsal cluster up` for clusters."
+        ),
     )
     sub = parser.add_subparsers(dest="cmd", required=True)
-    _add_up(sub)
-    _add_db(sub)
     _add_cluster(sub)
 
     args = parser.parse_args(argv)
 
-    if args.cmd == "up":
-        return _cmd_up(args)
-    if args.cmd == "db":
-        if args.db_cmd == "upgrade":
-            return _cmd_db_upgrade(args)
-        if args.db_cmd == "rebuild":
-            return _cmd_db_rebuild(args)
-        if args.db_cmd == "status":
-            return _cmd_db_status(args)
     if args.cmd == "cluster":
         if args.cluster_cmd == "up":
             return _cmd_cluster_up(args)

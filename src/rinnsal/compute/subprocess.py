@@ -10,62 +10,14 @@ import threading
 from concurrent.futures import Future, ProcessPoolExecutor
 from typing import TYPE_CHECKING, Any
 
-_log = logging.getLogger(__name__)
-
 import cloudpickle
 
 from rinnsal.compute.executor import ExecutionResult, Executor
 
+_log = logging.getLogger(__name__)
+
 if TYPE_CHECKING:
     from rinnsal.modeling.expression import TaskExpression
-
-
-class _LoggingStream:
-    """Stream wrapper that captures text and logs it in real-time.
-
-    When an event_file-backed LoggerProxy is available, writes chunks
-    to the logger as text events so the viewer's Console tab shows
-    output from long-running tasks.
-
-    If *passthrough* is set, also writes to the original stream
-    (used when capture is disabled with ``-s``).
-    """
-
-    def __init__(
-        self,
-        name: str,
-        proxy: Any,
-        passthrough: Any = None,
-    ) -> None:
-        import io
-        self._buf = io.StringIO()
-        self._proxy = proxy
-        self._tag = name  # will be prefixed with task name by the engine
-        self._pending = ""
-        self._passthrough = passthrough
-        self._has_event_file = getattr(proxy, "_event_file_handle", None) is not None
-
-    def write(self, s: str) -> int:
-        self._buf.write(s)
-        if self._passthrough is not None:
-            self._passthrough.write(s)
-        if self._has_event_file:
-            self._pending += s
-            if "\n" in self._pending or len(self._pending) > 4096:
-                self._proxy.add_text(self._tag, self._pending)
-                self._pending = ""
-        return len(s)
-
-    def flush(self) -> None:
-        self._buf.flush()
-        if self._passthrough is not None:
-            self._passthrough.flush()
-        if self._has_event_file and self._pending:
-            self._proxy.add_text(self._tag, self._pending)
-            self._pending = ""
-
-    def getvalue(self) -> str:
-        return self._buf.getvalue()
 
 
 def _worker_execute(
@@ -75,70 +27,37 @@ def _worker_execute(
     capture: bool,
     remapped_pythonpath: str | None = None,
     checkpoint_path: str | None = None,
-    event_file: str | None = None,
     task_name: str = "",
-) -> tuple[bool, Any, str, str, bytes | None, bytes]:
-    """Worker function that runs in a subprocess.
+) -> tuple[bool, Any, str, str, bytes | None]:
+    """Worker entry point running in a child process.
 
-    Returns:
-        Tuple of (success, result_or_error, stdout, stderr,
-                  serialized_error, card, logger_events)
+    Returns (success, result_or_None, stdout, stderr, serialized_error_or_None).
     """
     import io
-    import sys
     from contextlib import redirect_stderr, redirect_stdout
     from pathlib import Path
 
-    # If remapped PYTHONPATH provided, replace sys.path
     original_path = None
     if remapped_pythonpath:
         original_path = sys.path.copy()
         sys.path = remapped_pythonpath.split(os.pathsep)
 
-    # Deserialize
     func = cloudpickle.loads(serialized_func)
     args = cloudpickle.loads(serialized_args)
     kwargs = cloudpickle.loads(serialized_kwargs)
 
     from rinnsal.context import Checkpoint, current
-    from rinnsal.data.logger.proxy import LoggerProxy
 
-    # Propagate the task name into the worker's context so user code
-    # (e.g. Logger.card()) can see ``current.task_name``.
     if task_name:
         current._set_task_name(task_name)
 
-    # When event_file is provided, events are written directly to the
-    # flow's events.pb (flushed per event) so the viewer can show live
-    # data.  Otherwise fall back to buffer mode (replayed after task).
-    proxy = LoggerProxy(event_file=event_file)
-    current._set_logger(proxy)
+    stdout_capture = io.StringIO()
+    stderr_capture = io.StringIO()
 
-    # Use logging streams that write console output to the logger in
-    # real-time (when event_file is set), so the viewer's Console tab
-    # shows output from long-running tasks.
-    # When capture is disabled (-s), pass through to real stdout/stderr.
-    if event_file:
-        stdout_tag = f"{task_name}/stdout" if task_name else "stdout"
-        stderr_tag = f"{task_name}/stderr" if task_name else "stderr"
-        stdout_capture = _LoggingStream(
-            stdout_tag, proxy,
-            passthrough=None if capture else sys.stdout,
-        )
-        stderr_capture = _LoggingStream(
-            stderr_tag, proxy,
-            passthrough=None if capture else sys.stderr,
-        )
-    else:
-        stdout_capture = io.StringIO()
-        stderr_capture = io.StringIO()
     if checkpoint_path:
         current._set_checkpoint(Checkpoint(path=Path(checkpoint_path)))
     try:
-        if capture or event_file:
-            # Always redirect when event_file is set so we can log
-            # console output to the viewer, even with -s (passthrough
-            # sends it to the terminal too).
+        if capture:
             with (
                 redirect_stdout(stdout_capture),
                 redirect_stderr(stderr_capture),
@@ -153,25 +72,20 @@ def _worker_execute(
             stdout_capture.getvalue(),
             stderr_capture.getvalue(),
             None,
-            proxy.get_buffer(),
         )
     except Exception as e:
         import traceback
 
         tb = traceback.format_exception(e)
-        stderr_val = stderr_capture.getvalue()
-        stderr_val += "".join(tb)
+        stderr_val = stderr_capture.getvalue() + "".join(tb)
         return (
             False,
             None,
             stdout_capture.getvalue(),
             stderr_val,
             cloudpickle.dumps(e),
-            proxy.get_buffer(),
         )
     finally:
-        current._reset_logger()
-        # Restore original sys.path
         if original_path is not None:
             sys.path = original_path
 
@@ -179,9 +93,8 @@ def _worker_execute(
 class SubprocessExecutor(Executor):
     """Executor that runs tasks in separate processes.
 
-    Provides isolation - each task gets a fresh subprocess, so crashes
-    don't take down the orchestrator or poison a shared pool.
-    Concurrency is limited by max_workers via a semaphore.
+    Each task gets a fresh subprocess so crashes don't poison a shared
+    pool. Concurrency is limited by ``max_workers`` via a semaphore.
     """
 
     def __init__(
@@ -199,23 +112,12 @@ class SubprocessExecutor(Executor):
     def max_workers(self) -> int:
         return self._max_workers
 
-    def _get_event_file(self) -> str | None:
-        """Resolve events.pb path from the logger for direct file writes."""
-        if self._logger is None:
-            return None
-        writer = getattr(self._logger, "_event_writer", None)
-        if writer is None:
-            return None
-        path = getattr(writer, "_path", None)
-        return str(path) if path else None
-
     def _prepare_submission(
         self,
-        expr: TaskExpression,
+        expr: "TaskExpression",
         resolved_args: tuple[Any, ...],
         resolved_kwargs: dict[str, Any],
     ) -> tuple:
-        """Prepare serialized arguments for submission."""
         remapped_pythonpath: str | None = None
         if self._snapshot:
             from rinnsal.versioning.snapshot import (
@@ -240,7 +142,6 @@ class SubprocessExecutor(Executor):
             self._capture,
             remapped_pythonpath,
             self._checkpoint_path,
-            self._get_event_file(),
             expr.task_name or "",
         )
 
@@ -248,22 +149,16 @@ class SubprocessExecutor(Executor):
     def _handle_worker_result(
         f: Future, result_future: Future[ExecutionResult]
     ) -> None:
-        """Handle the result from a worker future."""
         try:
-            (
-                success, result_bytes, stdout, stderr,
-                error_bytes, logger_events,
-            ) = f.result()
+            success, result_bytes, stdout, stderr, error_bytes = f.result()
 
             if success:
-                result = cloudpickle.loads(result_bytes)
                 result_future.set_result(
                     ExecutionResult(
-                        value=result,
+                        value=cloudpickle.loads(result_bytes),
                         stdout=stdout,
                         stderr=stderr,
                         success=True,
-                        logger_events=logger_events,
                     )
                 )
             else:
@@ -277,25 +172,19 @@ class SubprocessExecutor(Executor):
                         stderr=stderr,
                         success=False,
                         error=error,
-                        logger_events=logger_events,
                     )
                 )
         except Exception as e:
             result_future.set_result(
-                ExecutionResult(
-                    value=None,
-                    success=False,
-                    error=e,
-                )
+                ExecutionResult(value=None, success=False, error=e)
             )
 
     def submit(
         self,
-        expr: TaskExpression,
+        expr: "TaskExpression",
         resolved_args: tuple[Any, ...],
         resolved_kwargs: dict[str, Any],
     ) -> Future[ExecutionResult]:
-        """Submit a task for subprocess execution."""
         submit_args = self._prepare_submission(
             expr, resolved_args, resolved_kwargs
         )
@@ -304,42 +193,34 @@ class SubprocessExecutor(Executor):
         def _run() -> None:
             self._semaphore.acquire()
             proc = ProcessPoolExecutor(
-                max_workers=1,
-                mp_context=self._mp_context,
+                max_workers=1, mp_context=self._mp_context,
             )
             try:
                 future = proc.submit(*submit_args)
                 self._handle_worker_result(future, result_future)
             except Exception as e:
                 result_future.set_result(
-                    ExecutionResult(
-                        value=None,
-                        success=False,
-                        error=e,
-                    )
+                    ExecutionResult(value=None, success=False, error=e)
                 )
             finally:
                 proc.shutdown(wait=True)
                 self._semaphore.release()
 
-        thread = threading.Thread(target=_run, daemon=True)
-        thread.start()
+        threading.Thread(target=_run, daemon=True).start()
         return result_future
 
     def shutdown(self, wait: bool = True) -> None:
         """No persistent pool to shut down."""
 
     def __repr__(self) -> str:
-        return f"SubprocessExecutor(max_workers={self._max_workers}, capture={self._capture})"
+        return (
+            f"SubprocessExecutor(max_workers={self._max_workers}, "
+            f"capture={self._capture})"
+        )
 
 
 class ForkExecutor(Executor):
-    """Executor that uses fork for task isolation (Unix only).
-
-    More efficient than SubprocessExecutor because it shares memory
-    at the point of fork. Only available on Unix systems.
-    Each task gets a fresh process; concurrency is limited by max_workers.
-    """
+    """Executor that uses fork for task isolation (Unix only)."""
 
     def __init__(
         self,
@@ -361,11 +242,10 @@ class ForkExecutor(Executor):
 
     def _prepare_submission(
         self,
-        expr: TaskExpression,
+        expr: "TaskExpression",
         resolved_args: tuple[Any, ...],
         resolved_kwargs: dict[str, Any],
     ) -> tuple:
-        """Prepare serialized arguments for submission."""
         remapped_pythonpath: str | None = None
         if self._snapshot:
             from rinnsal.versioning.snapshot import (
@@ -382,14 +262,6 @@ class ForkExecutor(Executor):
         serialized_args = cloudpickle.dumps(resolved_args)
         serialized_kwargs = cloudpickle.dumps(resolved_kwargs)
 
-        # Reuse SubprocessExecutor's event file resolution
-        event_file: str | None = None
-        if self._logger is not None:
-            writer = getattr(self._logger, "_event_writer", None)
-            if writer is not None:
-                path = getattr(writer, "_path", None)
-                event_file = str(path) if path else None
-
         return (
             _worker_execute,
             serialized_func,
@@ -398,17 +270,15 @@ class ForkExecutor(Executor):
             self._capture,
             remapped_pythonpath,
             self._checkpoint_path,
-            event_file,
             expr.task_name or "",
         )
 
     def submit(
         self,
-        expr: TaskExpression,
+        expr: "TaskExpression",
         resolved_args: tuple[Any, ...],
         resolved_kwargs: dict[str, Any],
     ) -> Future[ExecutionResult]:
-        """Submit a task for fork-based execution."""
         submit_args = self._prepare_submission(
             expr, resolved_args, resolved_kwargs
         )
@@ -417,30 +287,27 @@ class ForkExecutor(Executor):
         def _run() -> None:
             self._semaphore.acquire()
             proc = ProcessPoolExecutor(
-                max_workers=1,
-                mp_context=self._mp_context,
+                max_workers=1, mp_context=self._mp_context,
             )
             try:
                 future = proc.submit(*submit_args)
                 SubprocessExecutor._handle_worker_result(future, result_future)
             except Exception as e:
                 result_future.set_result(
-                    ExecutionResult(
-                        value=None,
-                        success=False,
-                        error=e,
-                    )
+                    ExecutionResult(value=None, success=False, error=e)
                 )
             finally:
                 proc.shutdown(wait=True)
                 self._semaphore.release()
 
-        thread = threading.Thread(target=_run, daemon=True)
-        thread.start()
+        threading.Thread(target=_run, daemon=True).start()
         return result_future
 
     def shutdown(self, wait: bool = True) -> None:
         """No persistent pool to shut down."""
 
     def __repr__(self) -> str:
-        return f"ForkExecutor(max_workers={self._max_workers}, capture={self._capture})"
+        return (
+            f"ForkExecutor(max_workers={self._max_workers}, "
+            f"capture={self._capture})"
+        )

@@ -171,11 +171,9 @@ class FlowResult:
         engine = self._get_or_create_engine()
         database = engine.database
 
-        # Create logger for this flow run
         import time as _time
         from pathlib import Path
         from rinnsal.context import current
-        from rinnsal.data.logger import Logger
         from rinnsal.versioning.local import LocalRunStore
 
         db_path = Path(self._builtin_flags.get("db_path", ".rinnsal"))
@@ -192,103 +190,27 @@ class FlowResult:
         if run_store is None:
             run_dir.mkdir(parents=True, exist_ok=True)
 
-        # Acquire the metadata store via the database when possible.
-        # Heavy-path: events.pb stays canonical; the DB is a fast index.
-        metadata_store = None
-        if database is not None and hasattr(database, "metadata_store"):
-            try:
-                metadata_store = database.metadata_store()
-            except Exception:
-                import sys
-                import traceback
-
-                sys.stderr.write(
-                    "rinnsal: could not open metadata store; "
-                    "continuing without it.\n"
-                )
-                traceback.print_exc(file=sys.stderr)
-                metadata_store = None
-
-        logger = Logger(run_dir, database=database, metadata_store=metadata_store)
-        logger.set_run_metadata(run_id, self._flow_name)
-        current._set_logger(logger)
-        engine.executor.set_logger(logger)
-        logger.add_text("flow/info", f"Flow: {self._flow_name}")
-
-        # Stamp the run row in the metadata store. Failures are non-fatal.
-        if metadata_store is not None:
-            try:
-                from rinnsal.data.metadata import RunUpsert
-
-                metadata_store.upsert_flow(self._flow_name)
-                metadata_store.upsert_run(
-                    RunUpsert(
-                        run_id=run_id,
-                        flow_name=self._flow_name,
-                        run_dir=str(run_dir),
-                        status="running",
-                        started_at=_time.time(),
-                        tags=list(self._builtin_flags.get("tags", [])),
-                    )
-                )
-            except Exception:
-                import sys
-                import traceback
-
-                sys.stderr.write(
-                    "rinnsal: metadata_store run upsert failed; "
-                    "events.pb remains canonical.\n"
-                )
-                traceback.print_exc(file=sys.stderr)
-
-        # Log system information for this run
-        import platform
-        import socket
-
-        sysinfo_lines = [
-            f"hostname: {socket.gethostname()}",
-            f"platform: {platform.platform()}",
-            f"python: {platform.python_version()}",
-            f"processor: {platform.processor() or 'unknown'}",
-            f"executor: {engine.executor!r}",
-        ]
+        # Capture the snapshot hash up-front so tasks (and the
+        # ``AimLogger`` they instantiate) can stamp it on their runs.
+        snapshot_hash = ""
         try:
-            import os
-            sysinfo_lines.append(f"cpu_count: {os.cpu_count()}")
-            sysinfo_lines.append(f"pid: {os.getpid()}")
-            sysinfo_lines.append(f"cwd: {os.getcwd()}")
+            from rinnsal.versioning.snapshot import get_snapshot_manager
+
+            manager = get_snapshot_manager()
+            if ordered:
+                h, _ = manager.create_snapshot(ordered[0].func)
+                if h:
+                    snapshot_hash = h
         except Exception:
             pass
-        try:
-            import shutil
-            total, used, free = shutil.disk_usage("/")
-            sysinfo_lines.append(
-                f"disk: {free // (1024**3)}GB free / {total // (1024**3)}GB total"
-            )
-        except Exception:
-            pass
-        try:
-            with open("/proc/meminfo") as f:
-                for line in f:
-                    if line.startswith("MemTotal:"):
-                        mem_kb = int(line.split()[1])
-                        sysinfo_lines.append(f"memory: {mem_kb // (1024**2)}GB")
-                        break
-        except Exception:
-            pass
-        try:
-            import subprocess as _sp
-            gpu_out = _sp.run(
-                ["nvidia-smi", "--query-gpu=name,memory.total",
-                 "--format=csv,noheader"],
-                capture_output=True, text=True, timeout=5,
-            )
-            if gpu_out.returncode == 0 and gpu_out.stdout.strip():
-                for i, line in enumerate(gpu_out.stdout.strip().split("\n")):
-                    sysinfo_lines.append(f"gpu{i}: {line.strip()}")
-        except Exception:
-            pass
-        logger.add_text("system/info", "\n".join(sysinfo_lines))
+
+        # Publish the flow-run identity on the ambient context so task
+        # bodies can read it (see :mod:`rinnsal.context`).
+        current._set_flow_name(self._flow_name)
+        current._set_run_id(run_id)
+        current._set_snapshot_hash(snapshot_hash)
+        current._set_db_path(db_path.resolve())
+        current._set_executor(engine.executor)
 
         # Determine which tasks to execute vs load from cache
         if resume:
@@ -402,7 +324,6 @@ class FlowResult:
                     ordered_hashes=ordered_hashes,
                     engine=engine,
                     database=database,
-                    logger=logger,
                     progress=progress,
                     resume=resume,
                 )
@@ -431,7 +352,7 @@ class FlowResult:
                     f"{n_failed} failed in {elapsed:.1f}s\n"
                 )
 
-            # Record flow run
+            # Record flow run (task-result cache metadata only).
             if database is not None:
                 run_metadata: dict[str, Any] = {
                     "task_names": {e.task_name: e.hash for e in ordered},
@@ -439,20 +360,8 @@ class FlowResult:
                 tags = self._builtin_flags.get("tags", [])
                 if tags:
                     run_metadata["tags"] = tags
-
-                # Record snapshot hash
-                try:
-                    from rinnsal.versioning.snapshot import get_snapshot_manager
-
-                    manager = get_snapshot_manager()
-                    if ordered:
-                        snap_hash, _ = manager.create_snapshot(
-                            ordered[0].func
-                        )
-                        if snap_hash:
-                            run_metadata["snapshot"] = snap_hash
-                except Exception:
-                    pass
+                if snapshot_hash:
+                    run_metadata["snapshot"] = snapshot_hash
 
                 if run_store is not None:
                     run_store.record_run(
@@ -467,34 +376,6 @@ class FlowResult:
                         metadata=run_metadata,
                     )
 
-            # Mirror the run-completion to the metadata store, including
-            # any snapshot hash recorded during the run.
-            if metadata_store is not None:
-                try:
-                    final_status = (
-                        "interrupted" if interrupted
-                        else "failed" if errors
-                        else "success"
-                    )
-                    metadata_store.update_run_status(
-                        run_id,
-                        status=final_status,
-                        finished_at=_time.time(),
-                        failed_count=n_failed,
-                        snapshot_hash=run_metadata.get("snapshot")
-                        if database is not None
-                        else None,
-                        task_count=len(ordered),
-                    )
-                except Exception:
-                    import sys
-                    import traceback
-
-                    sys.stderr.write(
-                        "rinnsal: metadata_store.update_run_status failed.\n"
-                    )
-                    traceback.print_exc(file=sys.stderr)
-
             if interrupted:
                 raise KeyboardInterrupt
 
@@ -508,29 +389,6 @@ class FlowResult:
 
             return self._return_value
         finally:
-            # Mark any still-running tasks as killed so the viewer
-            # doesn't show them as "running" forever.
-            for expr in ordered:
-                if (
-                    expr.hash not in completed
-                    and expr.hash not in failed_hashes
-                    and expr.task_name
-                ):
-                    logger.add_task_node(
-                        task_name=expr.task_name,
-                        task_hash=expr.hash,
-                        status="failed",
-                        error="killed",
-                    )
-
-            # Close logger
-            logger.add_text(
-                "flow/summary",
-                f"{n_passed} passed, {n_cached} cached, {n_failed} failed",
-            )
-            logger.close()
-            current._reset_logger()
-
             if not self._builtin_flags.get("_engine_preset"):
                 engine.shutdown(wait=not interrupted)
 

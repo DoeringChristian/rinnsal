@@ -8,7 +8,6 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from rinnsal.compute.engine import ExecutionEngine
     from rinnsal.data.database import Database
-    from rinnsal.data.logger import Logger
     from rinnsal.modeling.expression import TaskExpression
     from rinnsal.modeling.graph import DAG
 
@@ -24,7 +23,6 @@ class RunPlan:
     ordered_hashes: set[str]
     engine: ExecutionEngine
     database: Database | None
-    logger: Logger
     progress: Any                  # ProgressBar or SilentProgress
     resume: bool
 

@@ -165,22 +165,13 @@ class SSHExecutor(Executor):
     ) -> ExecutionResult:
         """Execute a task on a remote host asynchronously.
 
-        Logger events are streamed back in real-time over stderr using a
-        magic-prefixed binary protocol (see ``rinnsal.data.logger.proxy``).
-        The task result is returned as base64-encoded cloudpickle on stdout.
+        The task result is returned as base64-encoded cloudpickle on
+        stdout; stderr is plain text. Logging goes through aim — the
+        user calls ``AimLogger(...)`` inside the task body, and aim's
+        tracking server (or on-disk repo) handles the network hop.
         """
-        import asyncio
-        import struct
-
-        from rinnsal.data.logger.proxy import STREAM_MAGIC
-
-        # Build remote Python script.
-        # The script sets up a LoggerProxy that streams events to
-        # sys.stderr.buffer with the RNNSL magic prefix.  User-visible
-        # stderr is captured via redirect_stderr into a StringIO and
-        # included in the result dict (same as before).
         remote_script = f'''
-import base64, sys, io, struct
+import base64, sys, io
 from contextlib import redirect_stdout, redirect_stderr
 
 try:
@@ -190,8 +181,7 @@ except ImportError:
     sys.exit(1)
 
 encoded_payload = """{encoded_payload}"""
-serialized_payload = base64.b64decode(encoded_payload)
-payload = cloudpickle.loads(serialized_payload)
+payload = cloudpickle.loads(base64.b64decode(encoded_payload))
 
 func = cloudpickle.loads(payload["func"])
 args = cloudpickle.loads(payload["args"])
@@ -199,12 +189,7 @@ kwargs = cloudpickle.loads(payload["kwargs"])
 capture = payload["capture"]
 task_name = payload.get("task_name", "")
 
-# Set up logger proxy — streams events to real stderr in real-time
-from rinnsal.data.logger.proxy import LoggerProxy
 from rinnsal.context import current
-
-proxy = LoggerProxy(stream=sys.stderr.buffer)
-current._set_logger(proxy)
 if task_name:
     current._set_task_name(task_name)
 
@@ -233,11 +218,7 @@ except Exception as e:
         "stderr": stderr_capture.getvalue(),
         "error": cloudpickle.dumps(e),
     }}
-finally:
-    current._reset_logger()
 
-# Flush proxy, then print result to stdout
-proxy.flush()
 print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
 '''
 
@@ -281,79 +262,20 @@ print(base64.b64encode(cloudpickle.dumps(output)).decode("ascii"))
             async with conn.create_process(
                 f"{python_cmd} -c '{remote_script}'",
             ) as proc:
-                # Read stderr in a background task, extracting event
-                # records (magic-prefixed) and relaying to local logger.
+                import asyncio as _asyncio
+
                 plain_stderr_parts: list[str] = []
 
                 async def _read_stderr() -> None:
-                    magic_len = len(STREAM_MAGIC)
-                    buf = b""
                     while True:
                         chunk = await proc.stderr.read(4096)
                         if not chunk:
                             break
-                        if isinstance(chunk, str):
-                            chunk = chunk.encode("latin-1")
-                        buf += chunk
-                        # Process complete records from buf
-                        while True:
-                            idx = buf.find(STREAM_MAGIC)
-                            if idx < 0:
-                                # No magic found — everything up to
-                                # the last (magic_len - 1) bytes is
-                                # plain text (keep the tail as potential
-                                # partial magic).
-                                safe = len(buf) - (magic_len - 1)
-                                if safe > 0:
-                                    plain_stderr_parts.append(
-                                        buf[:safe].decode("utf-8", errors="replace")
-                                    )
-                                    buf = buf[safe:]
-                                break
-                            # Flush any plain text before the magic
-                            if idx > 0:
-                                plain_stderr_parts.append(
-                                    buf[:idx].decode("utf-8", errors="replace")
-                                )
-                            buf = buf[idx + magic_len:]
-                            # Need 4 bytes for length
-                            if len(buf) < 4:
-                                # Wait for more data
-                                more = await proc.stderr.read(4 - len(buf))
-                                if not more:
-                                    break
-                                if isinstance(more, str):
-                                    more = more.encode("latin-1")
-                                buf += more
-                            if len(buf) < 4:
-                                break
-                            length = struct.unpack("<I", buf[:4])[0]
-                            buf = buf[4:]
-                            # Read full event data
-                            while len(buf) < length:
-                                more = await proc.stderr.read(length - len(buf))
-                                if not more:
-                                    break
-                                if isinstance(more, str):
-                                    more = more.encode("latin-1")
-                                buf += more
-                            if len(buf) < length:
-                                break
-                            # Parse and relay the event
-                            if self._logger is not None:
-                                from rinnsal.data.logger.events_pb2 import Event
-                                ev = Event()
-                                ev.ParseFromString(buf[:length])
-                                self._logger._event_writer.write(ev)
-                                self._logger._event_writer.flush()
-                            buf = buf[length:]
-                    # Remaining buf is plain text
-                    if buf:
-                        plain_stderr_parts.append(
-                            buf.decode("utf-8", errors="replace")
-                        )
+                        if isinstance(chunk, bytes):
+                            chunk = chunk.decode("utf-8", errors="replace")
+                        plain_stderr_parts.append(chunk)
 
-                stderr_task = asyncio.ensure_future(_read_stderr())
+                stderr_task = _asyncio.ensure_future(_read_stderr())
 
                 # Read stdout (result)
                 stdout_data = await proc.stdout.read()
@@ -530,19 +452,13 @@ from pathlib import Path
 JOB_DIR = Path("{job_dir}")
 SUBMISSION = JOB_DIR / "submission.pkl"
 RESULT = JOB_DIR / "result.pkl"
-EVENTS = JOB_DIR / "events.pb"
 DONE = JOB_DIR / ".done"
 
 # Write PID
 (JOB_DIR / "pid").write_text(str(os.getpid()))
 
 import cloudpickle
-from rinnsal.data.logger.proxy import LoggerProxy
 from rinnsal.context import current
-
-# Logger writes directly to events.pb (flushed per event)
-proxy = LoggerProxy(event_file=str(EVENTS))
-current._set_logger(proxy)
 {task_name_block}
 {checkpoint_block}
 
@@ -565,8 +481,6 @@ except Exception as e:
     with open(RESULT, "wb") as _f:
         cloudpickle.dump(("error", e, tb), _f)
 finally:
-    current._reset_logger()
-    proxy.flush()
     _stdout_log.close()
     _stderr_log.close()
 
@@ -753,27 +667,22 @@ class PersistentSSHExecutor(SSHExecutor):
         host: SSHHost,
         job_id: str,
     ) -> None:
-        """Poll for job completion, syncing logger events incrementally."""
+        """Poll for job completion."""
         import asyncio
         import sys
         import time
 
-        from rinnsal.data.logger.proxy import replay_events
-
         job_dir = f"{self._work_dir}/jobs/{job_id}"
         connect_kwargs = self._connect_kwargs(host)
         delay = self._poll_interval
-        events_offset = 0
 
         while True:
             try:
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 try:
-                    done, events_offset = loop.run_until_complete(
-                        self._poll_once(
-                            connect_kwargs, job_dir, events_offset,
-                        )
+                    done = loop.run_until_complete(
+                        self._poll_once(connect_kwargs, job_dir)
                     )
                 finally:
                     loop.close()
@@ -812,31 +721,9 @@ class PersistentSSHExecutor(SSHExecutor):
         self,
         connect_kwargs: dict[str, Any],
         job_dir: str,
-        events_offset: int,
-    ) -> tuple[bool, int]:
-        """Single poll iteration. Returns (is_done, new_events_offset)."""
-        from rinnsal.data.logger.proxy import replay_events
-
+    ) -> bool:
+        """Single poll iteration. Returns ``True`` when the job is done."""
         async with asyncssh.connect(**connect_kwargs) as conn:
-            # Sync new logger events incrementally
-            if self._logger is not None and events_offset >= 0:
-                try:
-                    ev_result = await conn.run(
-                        f"tail -c +{events_offset + 1} "
-                        f"{job_dir}/events.pb 2>/dev/null || true",
-                        check=False,
-                        encoding=None,
-                    )
-                    raw = ev_result.stdout
-                    if raw:
-                        if isinstance(raw, str):
-                            raw = raw.encode("latin-1")
-                        if len(raw) > 0:
-                            replay_events(self._logger, raw)
-                            events_offset += len(raw)
-                except Exception:
-                    pass
-
             # Check completion
             result = await conn.run(
                 f"test -f {job_dir}/.done && echo DONE || "
@@ -848,12 +735,12 @@ class PersistentSSHExecutor(SSHExecutor):
             status = (result.stdout or "").strip()
 
             if status == "DONE":
-                return True, events_offset
+                return True
             if status == "DEAD":
                 # Process died without writing .done
-                return True, events_offset
+                return True
 
-            return False, events_offset
+            return False
 
     async def _fetch_result(
         self,

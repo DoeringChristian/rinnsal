@@ -69,7 +69,6 @@ class JobRecord:
     stderr: str = ""
     submitted_at: float = 0.0
     finished_at: float | None = None
-    logger_events_blob_hash: str = ""
     # Set when the result lands so the submitter's GET /status long-poll
     # can wake up immediately.
     completion_event: threading.Event = field(default_factory=threading.Event)
@@ -112,6 +111,11 @@ class CoordinatorState:
         # Optional content-addressed blob store (FileDatabase).
         self._database = database
         self._memory_blobs: dict[str, bytes] = {}
+        # The aim tracking server URL the coordinator advertises via
+        # GET /api/cluster/aim. Set by ``rinnsal cluster up --aim``;
+        # ``None`` when not spawned so clients fall back to their local
+        # aim repo.
+        self.aim_repo_url: str | None = None
         # Asyncio Event that pulses whenever a job becomes assignable
         # (submission, worker registration, etc.) — wakes long-polls.
         self._job_available: asyncio.Event | None = None
@@ -302,7 +306,6 @@ class CoordinatorState:
             rec.error_blob_hash = body.error_blob_hash
             rec.stdout = body.stdout
             rec.stderr = body.stderr
-            rec.logger_events_blob_hash = body.logger_events_blob_hash
             rec.finished_at = time.time()
             if rec.worker_id and rec.worker_id in self.workers:
                 ws = self.workers[rec.worker_id]
@@ -494,6 +497,21 @@ def get_health(
     return state.health()
 
 
+@router.get("/aim")
+def get_aim(
+    state: CoordinatorState = Depends(get_state),
+) -> dict[str, str | None]:
+    """Advertise the aim tracking URL the coordinator spawned.
+
+    ``rinnsal.aim.AimLogger`` queries this endpoint when it detects
+    that the active executor is a :class:`ClusterExecutor` so remote
+    tasks log to the shared tracking server rather than each worker's
+    local filesystem. ``repo`` is ``null`` when the coordinator was
+    started without ``--aim``.
+    """
+    return {"repo": state.aim_repo_url}
+
+
 # ── Blob upload / download ────────────────────────────────────────
 
 
@@ -656,5 +674,4 @@ async def get_job_status(
         stderr=rec.stderr,
         submitted_at=rec.submitted_at,
         finished_at=rec.finished_at,
-        logger_events_blob_hash=rec.logger_events_blob_hash,
     )

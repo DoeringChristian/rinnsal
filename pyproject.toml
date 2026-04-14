@@ -7,21 +7,20 @@ requires-python = ">=3.11"
 dependencies = [
     "cloudpickle>=3.0",
     "pyyaml>=6.0",
-    "protobuf>=4.0",
-    "sqlalchemy>=2.0",
-    "alembic>=1.13",
 ]
 
 [project.optional-dependencies]
 ssh = ["asyncssh>=2.14"]
-plotly = ["plotly>=5", "kaleido"]
-viewer = [
+# aim provides the logger + run store + UI (use `aim up` for the UI).
+aim = ["aim>=3.25,<4"]
+# Needed to run a cluster coordinator + to talk to one as a submitter.
+cluster = [
     "fastapi>=0.100",
     "uvicorn[standard]>=0.20",
+    "httpx>=0.25",
+    "pydantic>=2",
 ]
-# Needed to talk to a cluster coordinator (ClusterExecutor + rinnsal.sdk).
-cluster = ["httpx>=0.25"]
-all = ["rinnsal[ssh,plotly,viewer,cluster]"]
+all = ["rinnsal[ssh,aim,cluster]"]
 
 [dependency-groups]
 dev = [
@@ -35,7 +34,6 @@ dev = [
 
 [project.scripts]
 rinnsal = "rinnsal.cli.main:main"
-rinnsal-viewer = "rinnsal.viewer:main"
 
 [build-system]
 requires = ["uv_build>=0.10.10,<0.11.0"]
