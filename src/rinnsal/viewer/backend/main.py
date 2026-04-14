@@ -830,11 +830,40 @@ def create_app_with_static() -> FastAPI:
     dist_path = get_frontend_dist_path()
 
     if dist_path.exists():
-        # Serve frontend static files at root
-        app.mount(
-            "/",
-            StaticFiles(directory=str(dist_path), html=True),
-            name="frontend",
-        )
+        # Serve frontend static files at root. We wrap StaticFiles in a
+        # middleware-equivalent that forbids caching of index.html but
+        # lets hashed asset bundles under /assets/ cache aggressively
+        # (the hash in the filename is the cache buster — if we let
+        # index.html cache, the browser keeps pointing at an old bundle
+        # name after a rebuild, and fixes "ship" but never reach the
+        # user until they hard-reload).
+        inner = StaticFiles(directory=str(dist_path), html=True)
+
+        class _NoCacheIndex:
+            def __init__(self, app):
+                self.app = app
+
+            async def __call__(self, scope, receive, send):
+                path = scope.get("path", "")
+                is_html = path in ("", "/") or path.endswith(".html")
+
+                async def _send(message):
+                    if message["type"] == "http.response.start" and is_html:
+                        headers = list(message.get("headers", []))
+                        # Drop any prior Cache-Control.
+                        headers = [
+                            (k, v) for (k, v) in headers
+                            if k.lower() != b"cache-control"
+                        ]
+                        headers.append(
+                            (b"cache-control",
+                             b"no-cache, no-store, must-revalidate")
+                        )
+                        message["headers"] = headers
+                    await send(message)
+
+                await self.app(scope, receive, _send)
+
+        app.mount("/", _NoCacheIndex(inner), name="frontend")
 
     return app
