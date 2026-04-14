@@ -119,7 +119,20 @@ def _listing_headers(run_path: Path) -> dict[str, str]:
 def _not_modified(
     run_path: Path, if_modified_since: str | None
 ) -> Response | None:
-    """Return a 304 response if the client's cached copy is still fresh."""
+    """Return a 304 response if the client's cached copy is still fresh.
+
+    HTTP dates have 1-second resolution, so sub-second writes that
+    happen in the *same second* as a previous fetch would otherwise be
+    invisible: we'd emit ``Last-Modified: 10:30:45`` for an mtime of
+    10:30:45.1, the writer appends at 10:30:45.8, the client
+    revalidates with ``If-Modified-Since: 10:30:45`` and we'd say
+    "unchanged" even though bytes were added.
+
+    The fix is strict inequality — we return 304 only when the file is
+    *strictly older* than the client's timestamp. The cost is one
+    redundant full response per second of same-second activity, which
+    is fine for listing payloads.
+    """
     if not if_modified_since:
         return None
     mtime = _events_mtime(run_path)
@@ -128,8 +141,7 @@ def _not_modified(
     client_ts = _parse_http_date(if_modified_since)
     if client_ts is None:
         return None
-    # Compare at second granularity (HTTP dates have 1s resolution).
-    if int(mtime) <= int(client_ts):
+    if int(mtime) < int(client_ts):
         return Response(
             status_code=304,
             headers={
@@ -578,7 +590,10 @@ def _flows_not_modified(
     client_ts = _parse_http_date(if_modified_since)
     if client_ts is None:
         return None
-    if int(latest) <= int(client_ts):
+    # Strict inequality: see _not_modified() — HTTP date resolution is
+    # 1 second, so a file touched 100ms *later* in the same second
+    # would otherwise slip past revalidation as "not modified".
+    if int(latest) < int(client_ts):
         return Response(
             status_code=304,
             headers={

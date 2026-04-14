@@ -183,8 +183,7 @@ export default function RunDetailView({
     }
   });
 
-  // Auto-polling removed: the 5-second loop made the viewer painful over
-  // SSH tunnels. The sidebar refresh button bumps `refreshKey`, which
+  // Manual refresh: the sidebar button bumps `refreshKey`, which
   // clears the per-tab "already loaded" memo and forces a re-fetch.
   useEffect(() => {
     if (refreshKey === 0) return;
@@ -194,6 +193,36 @@ export default function RunDetailView({
     loadedRef.current.clear();
     loadTab(activeTab, true);
   }, [refreshKey, activeTab, loadTab]);
+
+  // Auto-revalidation while a tab is visible: a live-training run
+  // keeps appending events, so the fetched snapshot goes stale in
+  // seconds. We re-request the active tab on a 2s cadence; the
+  // backend returns 304 when events.pb hasn't changed (listings) or
+  // an immutable ETag 304 (bytes), so idle cost over SSH is a handful
+  // of empty-body HEAD-equivalents per cycle. Throttles to 10s while
+  // the tab is hidden to avoid burning battery on a backgrounded tab.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      if (cancelled) return;
+      // Force re-fetch regardless of `loadedRef` — revalidation is
+      // the whole point. The backend's If-Modified-Since check makes
+      // this cheap when nothing changed.
+      await loadTab(activeTab, true);
+    };
+    const schedule = () => {
+      const interval = document.visibilityState === "visible" ? 2000 : 10000;
+      return window.setTimeout(async () => {
+        await tick();
+        if (!cancelled) handle = schedule();
+      }, interval);
+    };
+    let handle = schedule();
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [activeTab, loadTab, runPath]);
 
   // Reset loaded cache when run changes. Bump the generation counter
   // so any in-flight fetch from the previous run discards its response.

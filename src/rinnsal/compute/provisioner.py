@@ -102,31 +102,6 @@ class PixiProvisioner:
     def project_dir(self) -> Path:
         return self._project_dir
 
-    def _find_path_deps(self) -> list[tuple[str, bool]]:
-        """Find path-based pypi dependencies in pixi.toml. Returns [(path, editable)]."""
-        pixi_toml = self._project_dir / "pixi.toml"
-        if not pixi_toml.exists():
-            return []
-        try:
-            import tomllib
-        except ImportError:
-            try:
-                import tomli as tomllib  # type: ignore
-            except ImportError:
-                return []
-        try:
-            with open(pixi_toml, "rb") as f:
-                data = tomllib.load(f)
-        except Exception:
-            return []
-
-        deps = []
-        for section in ["pypi-dependencies"]:
-            for _name, spec in data.get(section, {}).items():
-                if isinstance(spec, dict) and "path" in spec:
-                    deps.append((spec["path"], spec.get("editable", False)))
-        return deps
-
     def provision_script(self, work_dir: str) -> str:
         # Pin pixi to the extracted archive's manifest. Without
         # --manifest-path on each subcommand, pixi walks upward and can
@@ -145,14 +120,10 @@ class PixiProvisioner:
             f"cd {work_dir}",
             f"pixi install {mp} --quiet",
         ]
-        # Explicitly install path-based deps (pixi install may not handle them on a fresh clone)
-        path_deps = self._find_path_deps()
-        if path_deps:
-            lines.append(f"pixi run {mp} pip install --quiet uv-build hatchling setuptools 2>/dev/null || true")
-            for path, _editable in path_deps:
-                lines.append(f"pixi run {mp} pip install --quiet {work_dir}/{path}")
-        # Ensure cloudpickle is available
-        lines.append(f"pixi run {mp} pip install --quiet cloudpickle 2>/dev/null || true")
+        # pixi manages everything — including path-based pypi deps and
+        # cloudpickle if declared. Don't shell pip into the env; it
+        # either fights PEP 668 or resolves to the wrong interpreter.
+        # If the project needs cloudpickle, declare it in pixi.toml.
         # Run custom provision script if present (for builds like cmake/mitsuba).
         # Uses "pixi run bash" so the script sees the pixi-managed Python
         # and all dependencies on PATH.
