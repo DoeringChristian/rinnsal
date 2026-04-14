@@ -92,6 +92,13 @@ export default function RunDetailView({
   // curves on top of the new run).
   const runGenRef = useRef(0);
 
+  // Content-hash cache keyed by "<runPath>:<loadKey>". We stash the
+  // JSON-serialized previous response and compare before touching
+  // state — a poll tick that returns identical data must NOT set
+  // state, because setting a new Map reference rerenders every chart,
+  // image, and card on the page (and tears the user's scroll/zoom).
+  const lastSigRef = useRef<Map<string, string>>(new Map());
+
   const loadTab = useCallback(
     async (tab: DetailTab, force = false) => {
       const loadKey = textNeededTabs.includes(tab) ? "text" : tab;
@@ -102,49 +109,42 @@ export default function RunDetailView({
       const startedGen = runGenRef.current;
       const alive = () =>
         startedGen === runGenRef.current && startedPath === runPath;
-      setIsLoading(true);
+      // Only the first load shows the loading spinner. Silent
+      // background polls (force=true but already loaded) must not
+      // flicker the UI.
+      const isFirstLoad = !lastSigRef.current.has(key);
+      if (isFirstLoad) setIsLoading(true);
       try {
+        const applyIfChanged = <T,>(
+          d: T, setter: (fn: (prev: Map<string, T>) => Map<string, T>) => void,
+        ) => {
+          if (!alive()) return;
+          const sig = JSON.stringify(d);
+          if (lastSigRef.current.get(key) === sig) return;
+          lastSigRef.current.set(key, sig);
+          setter((prev) => new Map(prev).set(runPath, d));
+        };
         switch (loadKey) {
-          case "scalars": {
-            const d = await fetchScalars(runPath);
-            if (alive()) {
-              setScalars((prev) => new Map(prev).set(runPath, d));
-            }
+          case "scalars":
+            applyIfChanged(await fetchScalars(runPath), setScalars);
             break;
-          }
-          case "text": {
-            const d = await fetchText(runPath);
-            if (alive()) {
-              setText((prev) => new Map(prev).set(runPath, d));
-            }
+          case "text":
+            applyIfChanged(await fetchText(runPath), setText);
             break;
-          }
-          case "figures": {
-            const d = await fetchFiguresMeta(runPath);
-            if (alive()) {
-              setFigures((prev) => new Map(prev).set(runPath, d));
-            }
+          case "figures":
+            applyIfChanged(await fetchFiguresMeta(runPath), setFigures);
             break;
-          }
-          case "images": {
-            const d = await fetchImagesMeta(runPath);
-            if (alive()) {
-              setImages((prev) => new Map(prev).set(runPath, d));
-            }
+          case "images":
+            applyIfChanged(await fetchImagesMeta(runPath), setImages);
             break;
-          }
-          case "cards": {
-            const d = await fetchCardsIndex(runPath);
-            if (alive()) {
-              setCards((prev) => new Map(prev).set(runPath, d));
-            }
+          case "cards":
+            applyIfChanged(await fetchCardsIndex(runPath), setCards);
             break;
-          }
         }
       } catch (e) {
         console.error(`Failed to load ${tab}:`, e);
       } finally {
-        if (alive()) setIsLoading(false);
+        if (isFirstLoad && alive()) setIsLoading(false);
       }
     },
     [runPath]
@@ -191,38 +191,14 @@ export default function RunDetailView({
       scrollRef.current[activeTab] = contentRef.current.scrollTop;
     }
     loadedRef.current.clear();
+    lastSigRef.current.clear();
     loadTab(activeTab, true);
   }, [refreshKey, activeTab, loadTab]);
 
-  // Auto-revalidation while a tab is visible: a live-training run
-  // keeps appending events, so the fetched snapshot goes stale in
-  // seconds. We re-request the active tab on a 2s cadence; the
-  // backend returns 304 when events.pb hasn't changed (listings) or
-  // an immutable ETag 304 (bytes), so idle cost over SSH is a handful
-  // of empty-body HEAD-equivalents per cycle. Throttles to 10s while
-  // the tab is hidden to avoid burning battery on a backgrounded tab.
-  useEffect(() => {
-    let cancelled = false;
-    const tick = async () => {
-      if (cancelled) return;
-      // Force re-fetch regardless of `loadedRef` — revalidation is
-      // the whole point. The backend's If-Modified-Since check makes
-      // this cheap when nothing changed.
-      await loadTab(activeTab, true);
-    };
-    const schedule = () => {
-      const interval = document.visibilityState === "visible" ? 2000 : 10000;
-      return window.setTimeout(async () => {
-        await tick();
-        if (!cancelled) handle = schedule();
-      }, interval);
-    };
-    let handle = schedule();
-    return () => {
-      cancelled = true;
-      window.clearTimeout(handle);
-    };
-  }, [activeTab, loadTab, runPath]);
+  // Explicit-refresh only. Auto-polling (prior iteration) caused
+  // flicker on every tick even with content-hash gating — React
+  // re-mounts were too disruptive for long training sessions. Refresh
+  // via the sidebar button (bumps ``refreshKey``) or F5.
 
   // Reset loaded cache when run changes. Bump the generation counter
   // so any in-flight fetch from the previous run discards its response.
@@ -240,6 +216,7 @@ export default function RunDetailView({
       setImages(new Map());
       setCards(new Map());
       loadedRef.current.clear();
+      lastSigRef.current.clear();
     }
     prevRunPathRef.current = runPath;
   }, [runPath]);
