@@ -503,6 +503,47 @@ def get_blob(
     return _blob_response(data, blob_hash, if_none_match)
 
 
+@app.get("/api/snapshots/{snapshot_hash}/archive")
+def get_snapshot_archive(
+    snapshot_hash: str,
+    root: Annotated[str, Query(description="Log root (contains snapshots/)")],
+    if_none_match: str | None = Header(default=None),
+) -> Response:
+    """Stream a code snapshot as a deterministic tarball.
+
+    Snapshots live at ``<root>/snapshots/<hash>/`` and are tracked
+    automatically by the engine during task execution. Content-
+    addressed: the hash IS the identity, so the response is immutable.
+    The SDK uses this to reproduce the code that produced a given run.
+    """
+    root_path = Path(root).resolve()
+    src = root_path / "snapshots" / snapshot_hash
+    if not src.is_dir():
+        return Response(
+            status_code=404, content=b"snapshot not found"
+        )
+    etag = f'"{snapshot_hash}"'
+    if if_none_match and if_none_match.strip() == etag:
+        return Response(
+            status_code=304,
+            headers={
+                "Cache-Control": "public, max-age=31536000, immutable",
+                "ETag": etag,
+            },
+        )
+    from rinnsal.cluster.archive import build_project_archive
+
+    data, _ = build_project_archive(src)
+    return Response(
+        content=data,
+        media_type="application/x-tar",
+        headers={
+            "Cache-Control": "public, max-age=31536000, immutable",
+            "ETag": etag,
+        },
+    )
+
+
 def _metadata_store_for(root_path: Path):
     """Return a SqliteMetadataStore rooted at the given DB root.
 
@@ -620,6 +661,39 @@ def list_flows(
     return JSONResponse(
         content={"flows": result_flows},
         headers=_flows_headers(root_path),
+    )
+
+
+@app.get("/api/run/{run_id}/info")
+def run_info(
+    run_id: str,
+    root: Annotated[str, Query(description="Root directory containing flows/")],
+) -> Response:
+    """Return a single run's metadata including its ``snapshot_hash``.
+
+    The SDK uses this to discover which code snapshot produced a run so
+    it can fetch the matching tarball from ``/api/snapshots/{hash}``.
+    """
+    from fastapi.responses import JSONResponse
+
+    root_path = Path(root).resolve()
+    store = _metadata_store_for(root_path)
+    run = store.get_run(run_id)
+    if run is None:
+        return Response(status_code=404, content=b"run not found")
+    return JSONResponse(
+        content={
+            "run_id": run.run_id,
+            "flow": run.flow_name,
+            "run_dir": run.run_dir,
+            "status": run.status,
+            "started_at": run.started_at,
+            "finished_at": run.finished_at,
+            "snapshot_hash": run.snapshot_hash,
+            "task_count": run.task_count,
+            "failed_count": run.failed_count,
+            "tags": run.tags,
+        }
     )
 
 
