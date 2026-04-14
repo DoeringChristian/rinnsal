@@ -129,12 +129,13 @@ class PixiProvisioner:
 
     def provision_script(self, work_dir: str) -> str:
         # Pin pixi to the extracted archive's manifest. Without
-        # --manifest-path, pixi walks upward and can latch onto an
-        # unrelated pixi.toml (e.g. the submitter's dev checkout when
-        # the worker scratch dir is under $HOME), leaving no local
-        # .pixi/ env and silently "succeeding".
+        # --manifest-path on each subcommand, pixi walks upward and can
+        # latch onto an unrelated pixi.toml (e.g. the submitter's dev
+        # checkout when the worker scratch dir is under $HOME), leaving
+        # no local .pixi/ env and silently "succeeding". The flag
+        # belongs to the subcommand, not the root pixi command.
         manifest = f"{work_dir}/pixi.toml"
-        pixi = f"pixi --manifest-path {manifest}"
+        mp = f"--manifest-path {manifest}"
         lines = [
             "set -e",
             f"mkdir -p {work_dir}",
@@ -142,16 +143,16 @@ class PixiProvisioner:
             "command -v pixi >/dev/null 2>&1 || curl -fsSL https://pixi.sh/install.sh | sh",
             'export PATH="$HOME/.pixi/bin:$PATH"',
             f"cd {work_dir}",
-            f"{pixi} install --quiet",
+            f"pixi install {mp} --quiet",
         ]
         # Explicitly install path-based deps (pixi install may not handle them on a fresh clone)
         path_deps = self._find_path_deps()
         if path_deps:
-            lines.append(f"{pixi} run pip install --quiet uv-build hatchling setuptools 2>/dev/null || true")
+            lines.append(f"pixi run {mp} pip install --quiet uv-build hatchling setuptools 2>/dev/null || true")
             for path, _editable in path_deps:
-                lines.append(f"{pixi} run pip install --quiet {work_dir}/{path}")
+                lines.append(f"pixi run {mp} pip install --quiet {work_dir}/{path}")
         # Ensure cloudpickle is available
-        lines.append(f"{pixi} run pip install --quiet cloudpickle 2>/dev/null || true")
+        lines.append(f"pixi run {mp} pip install --quiet cloudpickle 2>/dev/null || true")
         # Run custom provision script if present (for builds like cmake/mitsuba).
         # Uses "pixi run bash" so the script sees the pixi-managed Python
         # and all dependencies on PATH.
@@ -162,7 +163,7 @@ class PixiProvisioner:
         if provision_sh.exists():
             lines.append(
                 # Resolve pixi's Python and export hints for cmake
-                f'PIXI_PYTHON="$({pixi} run which python)" && '
+                f'PIXI_PYTHON="$(pixi run {mp} which python)" && '
                 f'PIXI_PYTHON_DIR="$(dirname "$(dirname "$PIXI_PYTHON")")" && '
                 f'export Python_ROOT_DIR="$PIXI_PYTHON_DIR" && '
                 f'export Python3_ROOT_DIR="$PIXI_PYTHON_DIR" && '
@@ -173,16 +174,17 @@ class PixiProvisioner:
                 f'echo "[rinnsal] Clearing stale cmake cache: $cache"; '
                 f'rm -f "$cache"; fi; done'
             )
-            lines.append(f"{pixi} run bash {work_dir}/.rinnsal-provision.sh")
+            lines.append(f"pixi run {mp} bash {work_dir}/.rinnsal-provision.sh")
         return "\n".join(lines)
 
     def python_command(self, work_dir: str) -> str:
-        # Pin --manifest-path so pixi doesn't walk upward and end up
-        # running python from an unrelated parent project.
+        # Pin --manifest-path (belongs to the subcommand) so pixi doesn't
+        # walk upward and end up running python from an unrelated parent
+        # project.
         return (
             f'export PATH="$HOME/.pixi/bin:$PATH" && '
             f'cd {work_dir} && '
-            f'pixi --manifest-path {work_dir}/pixi.toml run python'
+            f'pixi run --manifest-path {work_dir}/pixi.toml python'
         )
 
 

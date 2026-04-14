@@ -99,13 +99,15 @@ class WorkerDaemon:
         self._heartbeat_thread: threading.Thread | None = None
         self._job_thread: threading.Thread | None = None
         # Where extracted project archives + per-job scratch live.
+        # Default to ``<cwd>/.rinnsal/worker/`` — the same convention
+        # submitters use for their run dirs, so `rm -rf .rinnsal` in the
+        # launch directory cleans up everything a coordinator or worker
+        # wrote.
+        from pathlib import Path
+
         if scratch_dir is None:
-            from pathlib import Path
-
-            scratch_dir = Path.home() / ".rinnsal" / "worker"
+            scratch_dir = Path.cwd() / ".rinnsal" / "worker"
         else:
-            from pathlib import Path
-
             scratch_dir = Path(scratch_dir)
         scratch_dir.mkdir(parents=True, exist_ok=True)
         self._scratch_dir = scratch_dir
