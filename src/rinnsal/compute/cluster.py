@@ -36,6 +36,17 @@ if TYPE_CHECKING:
 log = logging.getLogger("rinnsal.cluster.executor")
 
 
+def _import_httpx():
+    try:
+        httpx = _import_httpx()
+    except ModuleNotFoundError as e:
+        raise ModuleNotFoundError(
+            "ClusterExecutor needs httpx. Install the cluster extra: "
+            "`pip install 'rinnsal[cluster]'` or `uv add httpx`."
+        ) from e
+    return httpx
+
+
 class ClusterExecutor(Executor):
     """Submit tasks to a remote coordinator via HTTP.
 
@@ -74,7 +85,7 @@ class ClusterExecutor(Executor):
     def _request(self, method: str, path: str, json: Any = None) -> Any:
         if self._transport is not None:
             return self._transport(method, path, json=json)
-        import httpx
+        httpx = _import_httpx()
 
         url = urljoin(self._host_url + "/", path.lstrip("/"))
         with httpx.Client(timeout=60.0) as client:
@@ -87,7 +98,7 @@ class ClusterExecutor(Executor):
     def _request_bytes(self, method: str, path: str) -> bytes:
         if self._transport is not None:
             return self._transport(method, path, _binary=True)
-        import httpx
+        httpx = _import_httpx()
 
         url = urljoin(self._host_url + "/", path.lstrip("/"))
         with httpx.Client(timeout=120.0) as client:
@@ -98,7 +109,7 @@ class ClusterExecutor(Executor):
     def _put_bytes(self, path: str, data: bytes) -> Any:
         if self._transport is not None:
             return self._transport("PUT", path, _bytes=data)
-        import httpx
+        httpx = _import_httpx()
 
         url = urljoin(self._host_url + "/", path.lstrip("/"))
         with httpx.Client(timeout=120.0) as client:

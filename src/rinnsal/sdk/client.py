@@ -38,7 +38,13 @@ class Client:
         root: str,
         timeout: float = 30.0,
     ) -> None:
-        import httpx
+        try:
+            import httpx
+        except ModuleNotFoundError as e:
+            raise ModuleNotFoundError(
+                "rinnsal.sdk needs httpx. Install the cluster extra: "
+                "`pip install 'rinnsal[cluster]'` or `uv add httpx`."
+            ) from e
 
         self.host_url = host_url.rstrip("/")
         self.root = root
