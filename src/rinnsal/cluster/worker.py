@@ -134,6 +134,10 @@ class WorkerDaemon:
         timeouts = httpx.Timeout(60.0, connect=5.0)
         with httpx.Client(timeout=timeouts) as client:
             r = client.request(method, url, json=json)
+        if r.status_code == 204:
+            # No job ready (long-poll timeout) — matches the test
+            # transport's return-None contract.
+            return None
         r.raise_for_status()
         if r.headers.get("content-type", "").startswith("application/json"):
             return r.json()
@@ -559,6 +563,11 @@ class WorkerDaemon:
                 extract_archive(data, work_dir)
                 # Auto-detect provisioner against the extracted source.
                 provisioner = AutoProvisioner(search_dir=work_dir)
+                kind = type(getattr(provisioner, "inner", provisioner)).__name__
+                log.info(
+                    "provisioning %s with %s (work_dir=%s)",
+                    project_hash[:8], kind, work_dir,
+                )
                 script = provisioner.provision_script(str(work_dir))
                 import subprocess as _sp
 
@@ -571,7 +580,16 @@ class WorkerDaemon:
                 if proc.returncode != 0:
                     raise RuntimeError(
                         f"provisioner failed (exit {proc.returncode}):\n"
-                        f"{proc.stderr[:2000]}"
+                        f"stdout:\n{proc.stdout[-2000:]}\n"
+                        f"stderr:\n{proc.stderr[-2000:]}"
+                    )
+                log.info(
+                    "provisioner %s succeeded for %s",
+                    kind, project_hash[:8],
+                )
+                if proc.stderr:
+                    log.debug(
+                        "provisioner stderr:\n%s", proc.stderr[-1000:]
                     )
                 # Install rinnsal into the venv too — without this the
                 # subprocess can't import cloudpickle / unpickle the
