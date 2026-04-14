@@ -55,9 +55,25 @@ def _assert_listing_supports_revalidation(client, url: str) -> None:
     cc = r.headers.get("cache-control")
     assert lm, f"{url} missing Last-Modified"
     assert cc and "must-revalidate" in cc, f"{url} missing Cache-Control"
-    r2 = client.get(url, headers={"If-Modified-Since": lm})
+
+    # Revalidation must use a timestamp STRICTLY newer than the file's
+    # mtime: HTTP dates have 1s resolution, so equal timestamps could
+    # mask sub-second writes. Give the client timestamp 2s of headroom.
+    from email.utils import formatdate, parsedate_to_datetime
+
+    ts = parsedate_to_datetime(lm).timestamp()
+    newer = formatdate(ts + 2, usegmt=True)
+    r2 = client.get(url, headers={"If-Modified-Since": newer})
     assert r2.status_code == 304, f"{url} did not return 304 on revalidation"
     assert r2.content == b""
+
+    # And the equal-second case MUST return 200 (fresh) — that's the
+    # whole point of strict inequality.
+    r3 = client.get(url, headers={"If-Modified-Since": lm})
+    assert r3.status_code == 200, (
+        f"{url} returned 304 for equal-second If-Modified-Since — "
+        f"this masks sub-second writes"
+    )
 
 
 class TestListingRevalidation:

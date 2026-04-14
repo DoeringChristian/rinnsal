@@ -91,12 +91,19 @@ class TestFlowsEndpoint:
         assert r.headers.get("last-modified")
 
     def test_304_on_revalidation(self, tmp_path, client):
+        from email.utils import formatdate, parsedate_to_datetime
+
         _seed_db(tmp_path, n_runs=1)
         r = client.get(f"/api/flows?root={tmp_path}")
         lm = r.headers["last-modified"]
+        # Strict revalidation: client must present a timestamp newer
+        # than the file's mtime to get a 304 (HTTP dates have 1s
+        # resolution; equal timestamps return 200 to avoid masking
+        # sub-second writes).
+        ts = parsedate_to_datetime(lm).timestamp()
         r2 = client.get(
             f"/api/flows?root={tmp_path}",
-            headers={"If-Modified-Since": lm},
+            headers={"If-Modified-Since": formatdate(ts + 2, usegmt=True)},
         )
         assert r2.status_code == 304
 
