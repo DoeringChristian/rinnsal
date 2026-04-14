@@ -19,7 +19,9 @@ viewer = [
     "fastapi>=0.100",
     "uvicorn[standard]>=0.20",
 ]
-all = ["rinnsal[ssh,plotly,viewer]"]
+# Needed to talk to a cluster coordinator (ClusterExecutor + rinnsal.sdk).
+cluster = ["httpx>=0.25"]
+all = ["rinnsal[ssh,plotly,viewer,cluster]"]
 
 [dependency-groups]
 dev = [

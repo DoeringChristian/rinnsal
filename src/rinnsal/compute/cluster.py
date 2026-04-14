@@ -38,7 +38,7 @@ log = logging.getLogger("rinnsal.cluster.executor")
 
 def _import_httpx():
     try:
-        httpx = _import_httpx()
+        import httpx
     except ModuleNotFoundError as e:
         raise ModuleNotFoundError(
             "ClusterExecutor needs httpx. Install the cluster extra: "
