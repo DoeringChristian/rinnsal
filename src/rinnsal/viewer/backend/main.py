@@ -225,19 +225,50 @@ def list_runs(
     return result
 
 
+def _safe_json_response(
+    content: Any, headers: dict[str, str] | None = None
+) -> Response:
+    """JSONResponse that serializes NaN/Inf as ``null``.
+
+    Stdlib ``json.dumps`` refuses non-finite floats by default (and
+    browsers' ``JSON.parse`` refuses the ``allow_nan=True`` output
+    ``NaN``/``Infinity`` — that's non-standard JSON). Training runs
+    routinely emit NaN scalars on divergence; treating them as missing
+    values lets the viewer render the rest of the series.
+    """
+    import json
+    import math
+
+    def _clean(x: Any) -> Any:
+        if isinstance(x, float):
+            if math.isnan(x) or math.isinf(x):
+                return None
+            return x
+        if isinstance(x, dict):
+            return {k: _clean(v) for k, v in x.items()}
+        if isinstance(x, (list, tuple)):
+            return [_clean(v) for v in x]
+        return x
+
+    payload = json.dumps(_clean(content)).encode("utf-8")
+    return Response(
+        content=payload,
+        media_type="application/json",
+        headers=headers or {},
+    )
+
+
 def _cached_json(
     run_path: Path,
     if_modified_since: str | None,
     build: callable,  # type: ignore[valid-type]
 ) -> Response:
     """Shared flow for JSON listing endpoints: 304 when possible, else 200 with Last-Modified."""
-    from fastapi.responses import JSONResponse
-
     not_mod = _not_modified(run_path, if_modified_since)
     if not_mod is not None:
         return not_mod
     body = build()
-    return JSONResponse(content=body, headers=_listing_headers(run_path))
+    return _safe_json_response(body, _listing_headers(run_path))
 
 
 def _blob_response(
@@ -672,8 +703,8 @@ def list_flows(
             }
         )
 
-    from fastapi.responses import JSONResponse
-    return JSONResponse(
+    # JSONResponse replaced by _safe_json_response (NaN-safe)
+    return _safe_json_response(
         content={"flows": result_flows},
         headers=_flows_headers(root_path),
     )
@@ -689,14 +720,14 @@ def run_info(
     The SDK uses this to discover which code snapshot produced a run so
     it can fetch the matching tarball from ``/api/snapshots/{hash}``.
     """
-    from fastapi.responses import JSONResponse
+    # JSONResponse replaced by _safe_json_response (NaN-safe)
 
     root_path = Path(root).resolve()
     store = _metadata_store_for(root_path)
     run = store.get_run(run_id)
     if run is None:
         return Response(status_code=404, content=b"run not found")
-    return JSONResponse(
+    return _safe_json_response(
         content={
             "run_id": run.run_id,
             "flow": run.flow_name,
@@ -741,8 +772,8 @@ def task_history(
         }
         for h in store.task_history(flow_name, task_name)
     ]
-    from fastapi.responses import JSONResponse
-    return JSONResponse(
+    # JSONResponse replaced by _safe_json_response (NaN-safe)
+    return _safe_json_response(
         content={"history": history},
         headers=_flows_headers(root_path),
     )
@@ -762,8 +793,8 @@ def flow_dag(
     store = _metadata_store_for(root_path)
     runs = store.list_runs(flow_name=flow_name, limit=1)
     if not runs:
-        from fastapi.responses import JSONResponse
-        return JSONResponse(
+        # JSONResponse replaced by _safe_json_response (NaN-safe)
+        return _safe_json_response(
             content={"nodes": [], "edges": []},
             headers=_flows_headers(root_path),
         )
@@ -784,8 +815,8 @@ def flow_dag(
         {"from": f, "to": t}
         for f, t in store.list_task_edges(run.run_id)
     ]
-    from fastapi.responses import JSONResponse
-    return JSONResponse(
+    # JSONResponse replaced by _safe_json_response (NaN-safe)
+    return _safe_json_response(
         content={"run_id": run.run_id, "nodes": nodes, "edges": edges},
         headers=_flows_headers(root_path),
     )

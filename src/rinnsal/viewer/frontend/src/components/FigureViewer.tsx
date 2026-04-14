@@ -76,25 +76,31 @@ function FigureRunCard({ run, runPath, tag, figures, color, compareGroups, onAdd
   const [sliderActive, setSliderActive] = useState(false);
   const runName = run.split("/").pop() || run;
 
-  // Resolve index from selected iteration
-  let idx: number;
+  // During a drag the slider emits ``input`` events on every
+  // intermediate value — updating ``src`` on each would queue hundreds
+  // of requests. We track a transient ``draggingIdx`` for the label
+  // and commit to ``selectedIt`` (which drives ``src``) only on
+  // ``change`` (pointer release / keyboard commit).
+  const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
+
+  let committedIdx: number;
   if (selectedIt === null) {
-    idx = figures.length - 1; // follow latest
+    committedIdx = figures.length - 1; // follow latest
   } else {
     const found = figures.findIndex((f) => f.it === selectedIt);
-    idx = found >= 0 ? found : figures.length - 1;
+    committedIdx = found >= 0 ? found : figures.length - 1;
   }
+  const displayIdx = draggingIdx ?? committedIdx;
+  const currentFigure = figures[displayIdx];
+  const committedFigure = figures[committedIdx];
+  const imgUrl = figureImageUrl(runPath, tag, committedFigure.it);
 
-  const currentFigure = figures[idx];
-  // No cache-buster: with Cache-Control: immutable + ETag, the same URL
-  // is reused and served from the browser cache on subsequent views.
-  const imgUrl = figureImageUrl(runPath, tag, currentFigure.it);
-
-  const handleSliderChange = (newIdx: number) => {
+  const handleSliderCommit = (newIdx: number) => {
     const it = figures[newIdx]?.it;
     const isLatest = newIdx >= figures.length - 1;
     const val = isLatest ? null : it;
     setSelectedIt(val);
+    setDraggingIdx(null);
     try { sessionStorage.setItem(storageKey, val === null ? "" : String(val)); } catch {}
   };
 
@@ -124,7 +130,16 @@ function FigureRunCard({ run, runPath, tag, figures, color, compareGroups, onAdd
       </div>
       {figures.length > 1 && (
         <div className="mb-3" onMouseEnter={() => setSliderActive(true)} onMouseLeave={() => setSliderActive(false)}>
-          <input type="range" min={0} max={figures.length - 1} value={idx} onChange={(e) => handleSliderChange(parseInt(e.target.value))} className="w-full" draggable={false} />
+          <input
+            type="range"
+            min={0}
+            max={figures.length - 1}
+            value={displayIdx}
+            onInput={(e) => setDraggingIdx(parseInt((e.target as HTMLInputElement).value))}
+            onChange={(e) => handleSliderCommit(parseInt(e.target.value))}
+            className="w-full"
+            draggable={false}
+          />
         </div>
       )}
       <LazyImage src={imgUrl} alt={`${runName} - ${tag} @ ${currentFigure.it}`} className="max-w-full rounded" />

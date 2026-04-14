@@ -76,24 +76,36 @@ function ImageRunCard({ run, runPath, tag, images, color, compareGroups, onAddTo
   const [sliderActive, setSliderActive] = useState(false);
   const runName = run.split("/").pop() || run;
 
-  let idx: number;
+  // During a drag the slider emits ``input`` events on every
+  // intermediate value — updating the real src on each would queue
+  // hundreds of requests and render the wrong frame when older
+  // responses land after the newer target. We track a transient
+  // ``draggingIdx`` for visual feedback and only commit to
+  // ``selectedIt`` (which drives src) on ``change`` (pointer release /
+  // keyboard commit).
+  const [draggingIdx, setDraggingIdx] = useState<number | null>(null);
+
+  let committedIdx: number;
   if (selectedIt === null) {
-    idx = images.length - 1;
+    committedIdx = images.length - 1;
   } else {
     const found = images.findIndex((img) => img.it === selectedIt);
-    idx = found >= 0 ? found : images.length - 1;
+    committedIdx = found >= 0 ? found : images.length - 1;
   }
+  const displayIdx = draggingIdx ?? committedIdx;
+  const currentImg = images[displayIdx];
+  // The image <img> src is driven by the *committed* idx, not the
+  // drag idx — avoids mid-drag fetches. With Cache-Control: immutable
+  // + ETag the browser serves the same URL from cache on revisit.
+  const committedImg = images[committedIdx];
+  const imgSrc = imageUrl(runPath, tag, committedImg.it);
 
-  const currentImg = images[idx];
-  // No cache-buster: with Cache-Control: immutable + ETag, the browser
-  // serves the same URL from cache on subsequent views.
-  const imgSrc = imageUrl(runPath, tag, currentImg.it);
-
-  const handleSliderChange = (newIdx: number) => {
+  const handleSliderCommit = (newIdx: number) => {
     const it = images[newIdx]?.it;
     const isLatest = newIdx >= images.length - 1;
     const val = isLatest ? null : it;
     setSelectedIt(val);
+    setDraggingIdx(null);
     try { sessionStorage.setItem(storageKey, val === null ? "" : String(val)); } catch {}
   };
 
@@ -123,7 +135,16 @@ function ImageRunCard({ run, runPath, tag, images, color, compareGroups, onAddTo
       </div>
       {images.length > 1 && (
         <div className="mb-3" onMouseEnter={() => setSliderActive(true)} onMouseLeave={() => setSliderActive(false)}>
-          <input type="range" min={0} max={images.length - 1} value={idx} onChange={(e) => handleSliderChange(parseInt(e.target.value))} className="w-full" draggable={false} />
+          <input
+            type="range"
+            min={0}
+            max={images.length - 1}
+            value={displayIdx}
+            onInput={(e) => setDraggingIdx(parseInt((e.target as HTMLInputElement).value))}
+            onChange={(e) => handleSliderCommit(parseInt(e.target.value))}
+            className="w-full"
+            draggable={false}
+          />
         </div>
       )}
       <LazyImage src={imgSrc} alt={`${runName} - ${tag} @ ${currentImg.it}`} className="max-w-full rounded" />

@@ -583,6 +583,34 @@ interface CompareGroupPanelProps {
   onDropSlot: (slot: CompareSlot) => void;
 }
 
+function SlotSlider({
+  iterations, committedIt, onCommit,
+}: {
+  iterations: number[];
+  committedIt: number;
+  onCommit: (it: number) => void;
+}) {
+  // Local transient drag state: ``input`` events during a drag update
+  // the visible thumb; the committed value (which propagates to the
+  // parent and drives fetches) only changes on ``change``.
+  const committedIdx = Math.max(0, iterations.indexOf(committedIt));
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  return (
+    <input
+      type="range"
+      min={0}
+      max={iterations.length - 1}
+      value={dragIdx ?? committedIdx}
+      onInput={(e) => setDragIdx(parseInt((e.target as HTMLInputElement).value))}
+      onChange={(e) => {
+        onCommit(iterations[parseInt(e.target.value)]);
+        setDragIdx(null);
+      }}
+      className="w-full"
+    />
+  );
+}
+
 function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: CompareGroupPanelProps) {
   const [overlay, setOverlay] = useState(false);
   const [dragOver, setDragOver] = useState(false);
@@ -694,8 +722,14 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
   }, [slots]);
 
   const [globalIdx, setGlobalIdx] = useState(linkedIterations.length > 0 ? linkedIterations.length - 1 : 0);
+  // Transient drag value for the visible slider label. Committed
+  // ``globalIdx`` drives image/figure URLs so they don't refetch on
+  // every intermediate drag tick.
+  const [globalDragIdx, setGlobalDragIdx] = useState<number | null>(null);
   const safeGlobalIdx = Math.min(globalIdx, Math.max(0, linkedIterations.length - 1));
   const globalIt = linkedIterations[safeGlobalIdx] ?? 0;
+  const displayGlobalIdx = globalDragIdx ?? safeGlobalIdx;
+  const displayGlobalIt = linkedIterations[displayGlobalIdx] ?? globalIt;
 
   const removeSlot = (idx: number) => onUpdate({ ...group, slots: slots.filter((_, i) => i !== idx) });
   const toggleLink = (idx: number) => onUpdate({ ...group, slots: slots.map((s, i) => i === idx ? { ...s, linked: !s.linked } : s) });
@@ -797,8 +831,16 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
     <div ref={mode === "inline" ? containerRefCallback : undefined} key={mode}>
       {!group.collapsed && linkedIterations.length > 1 && (
         <div className="flex items-center gap-2 mb-3">
-          <span className="text-xs text-gray-500 shrink-0">it: {globalIt}</span>
-          <input type="range" min={0} max={linkedIterations.length - 1} value={safeGlobalIdx} onChange={(e) => setGlobalIdx(parseInt(e.target.value))} className="flex-1" />
+          <span className="text-xs text-gray-500 shrink-0">it: {displayGlobalIt}</span>
+          <input
+            type="range"
+            min={0}
+            max={linkedIterations.length - 1}
+            value={displayGlobalIdx}
+            onInput={(e) => setGlobalDragIdx(parseInt((e.target as HTMLInputElement).value))}
+            onChange={(e) => { setGlobalIdx(parseInt(e.target.value)); setGlobalDragIdx(null); }}
+            className="flex-1"
+          />
         </div>
       )}
       {!group.collapsed && (() => {
@@ -936,12 +978,12 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                       <ScalarGroupChart
                         slots={panelSlotData.map((s) => ({
                           run: s.run, tag: s.tag,
-                          it: s.linked ? closestIt(s.iterations, globalIt) : s.localIt,
+                          it: s.linked ? closestIt(s.iterations, displayGlobalIt) : s.localIt,
                           multiplier: s.scalarMultiplier ?? 1,
                           offset: s.scalarOffset ?? 0,
                           yLinked: s.scalarYLinked !== false,
                         }))}
-                        globalIt={globalIt}
+                        globalIt={displayGlobalIt}
                         onSetIteration={(it) => {
                           // Find closest index in linkedIterations and set the global slider
                           let bestIdx = 0;
@@ -997,7 +1039,7 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                         const s = slots[sIdx];
                         const runName = s.run.split("/").pop() || s.run;
                         const color = getRunColor(s.run);
-                        const curIt = s.linked ? closestIt(s.iterations, globalIt) : s.localIt;
+                        const curIt = s.linked ? closestIt(s.iterations, displayGlobalIt) : s.localIt;
                         const cardShowLeft = cardDropIdx?.idx === sIdx && cardDropIdx.side === "left";
                         const cardShowRight = cardDropIdx?.idx === sIdx && cardDropIdx.side === "right";
                         return (
@@ -1202,7 +1244,11 @@ function CompareGroupPanel({ group, onUpdate, onDelete, onPopout, onDropSlot }: 
                   </div>
                   {!slot.linked && slot.iterations.length > 1 && (
                     <div className="mb-2" onMouseEnter={() => setSliderActiveIdx(idx)} onMouseLeave={() => setSliderActiveIdx(null)}>
-                      <input type="range" min={0} max={slot.iterations.length - 1} value={slot.iterations.indexOf(slot.localIt)} onChange={(e) => setLocalIt(idx, slot.iterations[parseInt(e.target.value)])} className="w-full" />
+                      <SlotSlider
+                        iterations={slot.iterations}
+                        committedIt={slot.localIt}
+                        onCommit={(it) => setLocalIt(idx, it)}
+                      />
                     </div>
                   )}
                   <SlotContent slot={slot} it={it} />
