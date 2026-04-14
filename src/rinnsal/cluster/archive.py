@@ -44,25 +44,52 @@ _DEFAULT_EXCLUDES = {
 
 
 def _list_files_git(root: Path) -> list[Path] | None:
-    try:
-        result = subprocess.run(
-            ["git", "ls-files", "--recurse-submodules", "-z"],
-            capture_output=True,
-            cwd=str(root),
-            timeout=30,
-        )
-    except (FileNotFoundError, subprocess.SubprocessError):
+    """List files the way a deterministic packaging tool would see the tree.
+
+    We combine two git lists:
+    * ``ls-files --recurse-submodules`` — tracked files, including
+      submodule contents (this is what pulls in vendored subprojects
+      like ``ext/rinnsal``).
+    * ``ls-files --others --exclude-standard`` — untracked files that
+      aren't gitignored (your uncommitted ``pixi.toml`` / ``test.py``).
+
+    Without the second list, an uncommitted-but-not-ignored project
+    would ship an almost-empty archive, which silently falls through to
+    the wrong provisioner on the worker.
+    """
+    def _run(args: list[str]) -> bytes | None:
+        try:
+            result = subprocess.run(
+                ["git", *args],
+                capture_output=True,
+                cwd=str(root),
+                timeout=30,
+            )
+        except (FileNotFoundError, subprocess.SubprocessError):
+            return None
+        if result.returncode != 0:
+            return None
+        return result.stdout
+
+    tracked = _run(["ls-files", "--recurse-submodules", "-z"])
+    if tracked is None:
         return None
-    if result.returncode != 0:
-        return None
-    raw = result.stdout
+    # Untracked (not gitignored) files at the top level. We don't need
+    # --recurse-submodules here: submodules' own tracked files are
+    # already covered above.
+    untracked = _run(["ls-files", "--others", "--exclude-standard", "-z"])
+    raw = tracked + (untracked or b"")
     if not raw:
         return []
+    seen: set[str] = set()
     files: list[Path] = []
     for entry in raw.split(b"\0"):
         if not entry:
             continue
         rel = entry.decode("utf-8", errors="replace")
+        if rel in seen:
+            continue
+        seen.add(rel)
         p = root / rel
         if p.is_file():
             files.append(p)
