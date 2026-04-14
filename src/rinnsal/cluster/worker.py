@@ -97,6 +97,7 @@ class WorkerDaemon:
         self._heartbeat_interval = 10.0
         self._stop_event = threading.Event()
         self._heartbeat_thread: threading.Thread | None = None
+        self._job_thread: threading.Thread | None = None
         # Where extracted project archives + per-job scratch live.
         if scratch_dir is None:
             from pathlib import Path
@@ -127,7 +128,11 @@ class WorkerDaemon:
         import httpx
 
         url = urljoin(self._host_url + "/", path.lstrip("/"))
-        with httpx.Client(timeout=15.0) as client:
+        # The coordinator holds jobs/next open for up to 30s; the client
+        # read timeout must exceed that or every idle poll looks like a
+        # failure. Short connect/write timeouts still catch real hangs.
+        timeouts = httpx.Timeout(60.0, connect=5.0)
+        with httpx.Client(timeout=timeouts) as client:
             r = client.request(method, url, json=json)
         r.raise_for_status()
         if r.headers.get("content-type", "").startswith("application/json"):
@@ -185,10 +190,28 @@ class WorkerDaemon:
         )
         self._heartbeat_thread.start()
 
+    def start_job_loop(self) -> None:
+        """Spawn the long-poll job loop on a background thread (idempotent).
+
+        Use this for embedded self-workers that share a process with the
+        coordinator. Standalone workers call :meth:`run_forever` instead,
+        which runs the loop on the main thread.
+        """
+        if self._job_thread is not None:
+            return
+        self._job_thread = threading.Thread(
+            target=self._job_loop,
+            name=f"rinnsal-job-loop-{self._name}",
+            daemon=True,
+        )
+        self._job_thread.start()
+
     def stop(self) -> None:
         self._stop_event.set()
         if self._heartbeat_thread is not None:
             self._heartbeat_thread.join(timeout=2.0)
+        if self._job_thread is not None:
+            self._job_thread.join(timeout=2.0)
 
     def run_forever(self) -> None:
         """Foreground entry: register, start heartbeats, run the job loop."""

@@ -35,8 +35,11 @@ class UvProvisioner:
         self._python_version = python_version
 
     def provision_script(self, work_dir: str) -> str:
-        packages = ["cloudpickle", *self._extra_packages]
-        pkg_str = " ".join(packages)
+        extras = " ".join(self._extra_packages)
+        # When the archive has a pyproject.toml we install the full project
+        # (and its dependencies) so remote tasks can import project modules.
+        # `uv sync` if a lock file is present for reproducibility, else
+        # `uv pip install -e .` for a best-effort editable install.
         return "\n".join([
             "set -e",
             f"mkdir -p {work_dir}",
@@ -45,7 +48,17 @@ class UvProvisioner:
             'export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"',
             f"cd {work_dir}",
             f"uv venv --quiet --clear --python {self._python_version} .venv",
-            f"uv pip install --quiet --python {work_dir}/.venv/bin/python {pkg_str}",
+            # Install project + deps if a pyproject.toml was shipped.
+            'if [ -f pyproject.toml ]; then',
+            '  if [ -f uv.lock ]; then',
+            f'    VIRTUAL_ENV={work_dir}/.venv uv sync --quiet --frozen --active 2>/dev/null || '
+            f'      VIRTUAL_ENV={work_dir}/.venv uv sync --quiet --active',
+            '  else',
+            f'    VIRTUAL_ENV={work_dir}/.venv uv pip install --quiet -e .',
+            '  fi',
+            'fi',
+            # Always ensure cloudpickle + any extras the caller asked for.
+            f"VIRTUAL_ENV={work_dir}/.venv uv pip install --quiet cloudpickle {extras}",
         ])
 
     def python_command(self, work_dir: str) -> str:

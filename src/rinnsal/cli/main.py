@@ -298,6 +298,10 @@ def _run_coordinator(args: argparse.Namespace) -> int:
                     time.sleep(0.1)
             try:
                 local_worker.start()
+                # start() only spawns heartbeats — the self-worker also
+                # needs the long-poll job loop, or the coordinator will
+                # queue jobs indefinitely with no one to pick them up.
+                local_worker.start_job_loop()
             except Exception as e:
                 print(
                     f"warning: local worker registration failed: {e}",

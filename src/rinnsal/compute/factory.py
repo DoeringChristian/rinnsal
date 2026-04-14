@@ -113,8 +113,14 @@ def create_executor(name: str, capture: bool = True) -> Any:
 
         from rinnsal.compute.cluster import ClusterExecutor
 
+        # RINNSAL_CLUSTER_NO_SHIP=1 skips project archive shipping; the
+        # worker then runs tasks inline in the coordinator's env. Handy
+        # for self-hosted single-machine setups where provisioning a
+        # venv per project is wasteful.
+        ship = os.environ.get("RINNSAL_CLUSTER_NO_SHIP") != "1"
         return ClusterExecutor(
-            raw, capture=capture, project_root=Path.cwd()
+            raw, capture=capture, project_root=Path.cwd(),
+            ship_project=ship,
         )
     else:
         raise ValueError(f"Unknown executor: {name}")
